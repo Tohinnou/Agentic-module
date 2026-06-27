@@ -1,0 +1,22 @@
+Bonjour [[CUSTOMER_NAME]],                                                                                                
+                                   
+  Nous avons bien reçu votre demande concernant le paiement de votre réservation [[BOOKING_ID]] (facture                    
+  [[INVOICE_NUMBER]]).                                          
+                                                                                                                            
+  Voici les informations utiles sur le traitement des paiements Marina Rentals :   
+
+  - Moyens de paiement acceptés : carte bancaire (Visa, Mastercard, American Express), virement SEPA, prélèvement
+  automatique pour les réservations récurrentes.
+  - Délai de traitement : les paiements par carte sont confirmés sous 24h. Les virements SEPA sont visibles sous 3 jours
+  ouvrés.
+  - Remboursements : ils sont effectués sur le moyen de paiement initial, sous 5 à 10 jours ouvrés après validation par
+  notre équipe.
+  - Échecs de paiement : un nouveau prélèvement est tenté automatiquement sous 48h. En cas d'échec persistant, votre
+  réservation peut être suspendue.
+
+  Si vous constatez une anomalie sur votre facture ou un débit injustifié, merci de nous transmettre les détails à
+  [[SUPPORT_EMAIL]] avec le numéro de transaction concerné.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

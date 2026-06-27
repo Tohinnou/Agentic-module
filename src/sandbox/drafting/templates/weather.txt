@@ -1,0 +1,23 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Nous avons bien reçu votre demande concernant les conditions météorologiques pour votre réservation [[BOOKING_ID]] prévue
+  le [[BOOKING_DATE]].
+
+  Notre politique météo Marina Rentals :
+
+  - Surveillance permanente : notre équipe consulte Météo France et les bulletins maritimes du CROSS toutes les 6 heures
+  pendant la saison.
+  - Annulation automatique : en cas d'alerte orange ou rouge (vent >35 noeuds, houle >2m, orages), nous annulons les
+  prestations concernées et vous contactons par SMS et email au moins 12h avant.
+  - Remboursement intégral : toute prestation annulée pour raison météo est remboursée à 100%, ou reportée selon votre
+  préférence.
+  - Décision client : si la météo est dégradée sans déclencher notre annulation automatique, vous pouvez choisir de reporter
+   votre prestation sans frais jusqu'à 6h avant le départ.
+
+  Pour consulter les conditions en temps réel : [[WEATHER_HOTLINE]] ou directement sur Météo France marine.
+
+  N'hésitez pas à nous recontacter si vous souhaitez reporter ou annuler votre prestation pour raison météo.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

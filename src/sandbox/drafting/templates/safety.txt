@@ -1,0 +1,23 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Votre message concernant un incident de sécurité a été reçu et est traité en priorité absolue.
+
+  EN CAS D'URGENCE IMMÉDIATE (personne en danger, accident en cours) :
+  - Composez le 112 (numéro européen d'urgence) ou le 196 (CROSS - secours en mer).
+  - Contactez immédiatement notre ligne d'urgence Marina Rentals : [[EMERGENCY_PHONE]] (disponible 24h/24).
+
+  Notre protocole sécurité prévoit :
+
+  - Une prise en charge immédiate par notre équipe sur place ou par téléphone.
+  - L'établissement d'un rapport d'incident dans les 24h, avec les autorités si nécessaire.
+  - Le remboursement intégral de la prestation en cours et la prise en charge des frais médicaux justifiés (sous réserve de
+  couverture par notre assurance).
+  - Un suivi personnalisé jusqu'à résolution complète.
+
+  Un membre de notre équipe va vous rappeler dans les meilleurs délais. Si vous préférez nous joindre immédiatement,
+  n'hésitez pas à composer [[EMERGENCY_PHONE]].
+
+  Votre sécurité est notre priorité absolue.
+
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

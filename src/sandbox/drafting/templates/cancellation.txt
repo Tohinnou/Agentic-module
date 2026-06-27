@@ -1,0 +1,19 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Nous avons bien reçu votre demande concernant votre réservation [[BOOKING_ID]] prévue le [[BOOKING_DATE]].
+
+  Conformément à notre politique d'annulation Marina Rentals :
+
+  - Annulation à plus de 48h avant la prestation : remboursement intégral, sans frais.
+  - Annulation entre 48h et 24h avant la prestation : remboursement de 70% (frais d'annulation de 30%).
+  - Annulation à moins de 24h avant la prestation : non remboursable, sauf cas de force majeure (urgence médicale
+  documentée, alerte météo officielle, indisponibilité de l'équipement de notre fait).
+
+  Si vous êtes dans une situation de force majeure, merci de nous transmettre les justificatifs à [[SUPPORT_EMAIL]] et nous
+  traiterons votre demande sous 48h ouvrées.
+
+  Pour toute autre question, n'hésitez pas à nous recontacter.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

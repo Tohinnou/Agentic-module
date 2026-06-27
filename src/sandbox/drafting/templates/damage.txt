@@ -1,0 +1,26 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Nous avons bien reçu votre déclaration concernant un dommage survenu pendant votre réservation [[BOOKING_ID]].
+
+  Procédure de déclaration de dommage :
+
+  - Rapport écrit : complétez le formulaire de déclaration disponible sur [[DAMAGE_REPORT_FORM_URL]] dans les 48h suivant
+  l'incident. Joignez des photos détaillées et, si applicable, un constat amiable signé par les parties impliquées.
+  - Évaluation : notre équipe technique évalue le coût des réparations sous 5 jours ouvrés et vous transmet un devis
+  détaillé.
+  - Caution : le montant des dommages est prélevé sur la caution versée à la réservation. Si les dommages excèdent la
+  caution, le complément est facturé selon les modalités prévues à votre contrat.
+  - Assurance : si vous avez souscrit l'option assurance dommages Marina Rentals (ou si votre carte bancaire couvre les
+  locations nautiques), contactez votre assureur en parallèle au [[INSURANCE_PHONE]].
+
+  Cas particuliers :
+
+  - Dommage causé par un tiers identifié : la procédure passe par le constat amiable et l'assurance du tiers responsable.
+  - Force majeure (météo soudaine non prévue par les alertes, défaillance matérielle de notre fait) : pas de retenue sur
+  caution.
+
+  Nous vous remercions de votre coopération dans le traitement de cette déclaration.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

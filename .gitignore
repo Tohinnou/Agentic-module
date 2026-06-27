@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Env files (jamais commit)
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+data/sandbox.db
+data/*.db
+trajectories/*.jsonl
+!trajectories/.gitkeep
+
+# Local backups (ne pas commit)
+src.zip
+*.zip.bak
+
+# Claude Code (local config)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Course PDFs (extraits en txt, originaux pas necessairement commitables)
+*.pdf

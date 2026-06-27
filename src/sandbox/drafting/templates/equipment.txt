@@ -1,0 +1,25 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Nous avons bien reçu votre signalement concernant l'équipement de votre réservation [[BOOKING_ID]] (référence
+  [[EQUIPMENT_REF]]).
+
+  Procédure équipement défectueux ou manquant :
+
+  - Sur place : si l'incident survient pendant la prestation, contactez immédiatement notre équipe au [[SUPPORT_PHONE]]. Un
+  remplacement ou une assistance technique sera dépêchée sous 30 minutes (port d'attache) ou 60 minutes (sites distants).
+  - Avant la prestation : si vous constatez un défaut au check-in, demandez immédiatement un remplacement à l'agent sur
+  site. Ne prenez pas la mer avec un équipement défaillant.
+  - Après la prestation : pour signaler un défaut découvert tardivement, transmettez-nous des photos à [[SUPPORT_EMAIL]]
+  dans les 48h suivant la fin de la location.
+
+  Indemnisations possibles :
+
+  - Remboursement proportionnel au temps perdu si l'équipement est resté inutilisable.
+  - Avoir équivalent sur une prochaine prestation, valable 12 mois.
+  - Remboursement intégral si la prestation a dû être annulée par notre faute.
+
+  Nous sommes désolés pour la gêne occasionnée et traitons votre signalement en priorité.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals

@@ -1,0 +1,20 @@
+Bonjour [[CUSTOMER_NAME]],
+
+  Nous avons bien reçu votre demande concernant une réservation Marina Rentals.
+
+  Voici les informations pour réserver ou modifier une prestation :
+
+  - Disponibilités : consultables en temps réel sur [[BOOKING_URL]], avec un calendrier par équipement (bateaux, kayaks,
+  paddles, accessoires).
+  - Réservation : à effectuer en ligne au moins 24h avant la date souhaitée. Pour les groupes (>6 personnes) ou les
+  équipements premium, prévoir 72h.
+  - Modification : possible jusqu'à 48h avant la prestation, sans frais, sous réserve de disponibilité du nouveau créneau.
+  - Capacités : chaque embarcation a une capacité maximale stricte indiquée sur la fiche produit. Aucun dépassement n'est
+  autorisé pour des raisons de sécurité.
+
+  Si vous avez une question spécifique sur un créneau ou un équipement, n'hésitez pas à nous préciser la date et le type de
+  prestation visée par retour de mail.
+
+  Cordialement,
+  [[AGENT_NAME]]
+  Équipe Marina Rentals
