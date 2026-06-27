@@ -39,6 +39,10 @@ trajectories/*.jsonl
 src.zip
 *.zip.bak
 
+# Repomix output (codebase packé pour partage LLM, regénérable)
+repomix-output.xml
+repomix-output.*
+
 # Claude Code (local config)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock

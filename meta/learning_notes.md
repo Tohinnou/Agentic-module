@@ -293,4 +293,64 @@ def reset_index(monkeypatch):
 
 ---
 
+### `src/sandbox/models.py` — refonte Tool 4 (Ticket schema v2)
+
+**Suppression de `customer_email` et `message` (Q1 defense in depth)** : Phase 1 avait un stub PII-friendly. Pour Tool 4, on a explicitement retiré ces 2 colonnes. Logique : la PII doit vivre dans la trajectoire (audit, accès contrôlé), **pas** dans la table `tickets` consultée régulièrement par les agents. Si un dev se trompe (`UPDATE tickets SET ... pour exfiltrer`), il ne trouve rien d'identifiant. Défense en profondeur — la PII absente au niveau colonne est impossible à fuiter par cette colonne.
+
+**`status` default `"new"` (pas `"open"`)** : "open" est ambigu (créé ? assigné ? en cours ?). "new" = explicite, dénote l'absence de tout traitement. Machine d'états future (new → assigned → in_progress → resolved → closed) plus claire à partir de "new".
+
+**`cited_policy_id` nullable** : "other" et certains edge cases peuvent ne pas avoir de policy citée. NOT NULL aurait forcé l'agent à inventer un ID factice ("MR-OTHER-2024-X") → cargo cult. Nullable = honnête sur le fait que l'audit trail peut être vide dans certains cas légitimes.
+
+**`draft_text: Mapped[str | None]` + type SQL `Text`** : `Text` (pas `String(N)`) parce qu'un draft peut faire plusieurs paragraphes. `Mapped[str | None]` (syntaxe Python 3.10+) = SQLAlchemy 2.0 infère `nullable=True` du `| None` automatiquement. On garde `nullable=True` explicite dans `mapped_column(...)` quand même — les futurs lecteurs n'ont pas à connaître la magie SQLAlchemy 2.0.
+
+**`idempotency_key: nullable=True, unique=True`** : nullable parce que beaucoup d'appels n'auront pas de clé (mode "fire and forget"). Unique parce que **quand il y en a une, elle garantit l'unicité**. SQLite traite `NULL` comme **distinct** dans un unique index → on peut avoir 1000 lignes avec `NULL` sans violation. Si la DB voit deux INSERT avec la même clé non-NULL → `IntegrityError`. **Atomique au niveau DB** — pas de race condition Python.
+
+**Pourquoi pas `sqlalchemy.Enum` pour `category` / `priority` / `status`** : SQLite n'a pas d'enum natif. SQLAlchemy traduit en CHECK constraint, mais ALTER est limité en SQLite (recréer la table à chaque ajout). Trade-off accepté : on valide côté Pydantic (Literal) au boundary du tool. **Assomption** : create_ticket est le seul writer → catégorie invalide ne peut jamais arriver en DB. Le coût d'une migration future Postgres (où Enum est plus naturel) reste contenu.
+
+**`server_default=func.now()` (pas `default=datetime.now`)** : `func.now()` exécuté **côté SQL** par la DB. Avantage : tous les processus voient la même horloge (celle de la DB). Avec `default=datetime.now` côté Python, deux serveurs avec des horloges légèrement désynchronisées produiraient des timestamps incohérents pour des INSERT concurrents.
+
+---
+
+### `src/sandbox/tools/create_ticket.py`
+
+**`risk_level: "act"` — premier tool de ce niveau** : ladder Read / Draft / Act du cours (Day 5). Read = pure lecture. Draft = génère sans envoyer. Act = effet de bord persistant ou externe (DB, email, paiement). `act` impose : Vibe Diff pré-action (résumé humain pré-exécution) + Vibe Trajectory post-action (audit). Le Policy Server (Phase 4) liera `risk_level=act` au pattern HITL automatiquement.
+
+**Pattern "try INSERT, except UNIQUE" (pas "SELECT then INSERT")** : pattern industriel (Stripe, Twilio). Le "check then insert" introduit une race condition (deux requêtes concurrentes voient "absent" en même temps). L'unique index DB est **atomique**. On essaie d'insérer ; si UNIQUE est violé → on lit l'existant. Aucune fenêtre de course possible.
+
+**`if payload.idempotency_key is None: raise`** : si IntegrityError survient sans clé d'idempotency, c'est forcément autre chose (NOT NULL violation, etc.). On ne doit pas avaler silencieusement — on re-raise. Avantage vs string-match sur le message d'erreur SQLite : portable entre dialectes (SQLite, Postgres, MySQL formulent l'erreur différemment).
+
+**Séparation 2 paramètres : `payload` (Pydantic) + `db_session` (SQLAlchemy)** : c'est concrètement le **Zero Ambient Authority** au niveau Python. Le tool ne va pas chercher la DB tout seul (pas de `SessionLocal()` global) — la session est **injectée** par le caller. Conséquences : (1) le contrat MCP n'expose que `payload`, pas la session, (2) on peut injecter une session de test (in-memory), de prod (file DB), ou DI FastAPI (`Depends(get_db)`) sans toucher au tool.
+
+**`session.rollback()` AVANT le `select` dans except** : indispensable. Une session avec une transaction en erreur ne peut plus exécuter de query — le `select` lèverait `InvalidRequestError`. Le `rollback` nettoie la transaction → la query suivante part sur une session saine.
+
+**`session.refresh(ticket)` après commit** : recharge l'objet depuis la DB pour récupérer les valeurs **générées server-side** : `created_at` (via `func.now()`). Sans `refresh`, `ticket.created_at` est `None` côté Python jusqu'à la prochaine query.
+
+**Drapeau `idempotency_replay: bool` dans l'output** : sans ce drapeau, l'appelant ne saurait pas si son INSERT a vraiment écrit ou s'il a juste relu un ticket existant. Le Policy Server / la trajectory peuvent logger différemment (vrai INSERT = action ; replay = no-op observable). C'est de l'**observabilité au niveau du contrat de retour**.
+
+**Absence intentionnelle de `body` / `message` / `customer_email` dans `CreateTicketInput`** : régression Q1 explicite côté contrat MCP. Si l'input acceptait `body`, le contrat **annoncerait** au LLM agent "tu peux passer le message client ici" → fuite intentionnelle. La PII se loggue dans la trajectory côté caller, pas dans le tool.
+
+**`description` du TOOL_METADATA encode `ATTENTION (risk_level=act)`** : pour que le LLM agent qui lit la doc du tool comprenne **pourquoi** ce tool est spécial — pas juste un INSERT comme un autre. Pédagogique pour le modèle lui-même, en plus du Policy Server.
+
+---
+
+### `tests/test_create_ticket.py`
+
+**Fixture `db_session` avec `StaticPool`** : piège SQLAlchemy classique. Par défaut, chaque nouvelle connexion à `sqlite:///:memory:` crée une **nouvelle DB vide** (la mémoire est isolée par connexion). `StaticPool` force une connexion unique partagée → la DB persiste pendant le test. Sans ça : l'INSERT et le SELECT suivant ne voient pas la même DB → tests qui passent en mode mock et castent en vrai.
+
+**Fixture per-test (pas `scope="module"`)** : isolation totale. Un test qui INSERT n'affecte pas le test suivant. Coût négligeable (in-memory, ~800ms total pour 9 tests). Trade-off : fidélité d'isolation > vitesse marginale.
+
+**Factory `_valid_input(**overrides)`** : DRY. 9 tests qui ont besoin d'un payload valide → 1 endroit central. `**overrides` = chaque test ne surcharge que ce qu'il teste **spécifiquement** → lisibilité (on voit immédiatement le delta par rapport au baseline).
+
+**Assertion `count == 1` après replay** : sans cet assert, on pourrait croire que "replay" = "renvoyer le même ID en RAM" alors qu'en réalité on aurait pu créer 2 lignes (le test ne le verrait pas). L'assert ferme cette possibilité. La vérité est en DB, pas dans l'objet retourné.
+
+**Test "pas d'idempotency_key = 2 ticket_id différents"** : verrouille la sémantique. On ne fait **pas** d'idempotence "magique" basée sur le hash du payload (Stripe ne le fait pas non plus). Idempotence = explicite via clé fournie. Sans ce test, quelqu'un pourrait ajouter un "smart hashing" sans le savoir et casser le contrat documenté.
+
+**`test_no_pii_columns_in_ticket_schema` (régression Q1 "tatouage")** : inspecte les colonnes effectives du modèle SQLAlchemy. Si quelqu'un (humain, copilot) re-ajoute `customer_email` ou `body` au modèle → test cassé immédiatement, avec un message qui dit exactement pourquoi. La décision Q1 vit dans le code de test, pas juste dans une conversation passée.
+
+**`test_draft_text_with_placeholders_persisted_intact`** : verrouille **Context Hygiene** côté persistance. Si un jour quelqu'un ajoute un helper qui résout `[[CUSTOMER_NAME]]` à `"Jean Dupont"` avant l'INSERT → PII en DB, test cassé. Le helper de résolution est interdit par contrat de test à ce niveau.
+
+**`test_tool_metadata_shape` avec `"body" not in in_props`** : régression Q1 au niveau du contrat MCP exposé. Le test interdit que `body` réapparaisse dans l'input schema. Sans ça, un dev pourrait re-ajouter `body` à `CreateTicketInput` sans le câbler à `Ticket(...)` → contrat MCP qui ment (validate `body` mais le jette silencieusement).
+
+---
+
 ## Phase 3 — *(à compléter)*

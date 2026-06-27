@@ -65,16 +65,16 @@ def create_ticket(payload: CreateTicketInput, db_session: Session) -> CreateTick
 TOOL_METADATA = {
       "name": "create_ticket",
       "description": (
-          "Crée un ticket Marina Rentals en base (INSERT). Side-effect non-idempotent par défaut, "
-          "rendu idempotent par fourniture d'un idempotency_key (unique en DB). "
-          "À utiliser APRÈS retrieve_docs + classify_ticket + draft_reply, comme dernière étape du "
-          "workflow agent → ticket. Audit trail : cited_policy_id stocké pour traçabilité de la "
-          "décision agent (quel doc policy a guidé la réponse). Le draft_text est stocké avec "
-          "placeholders [[VAR]] non résolus (Context Hygiene — résolution downstream uniquement). "
-          "ATTENTION (risk_level=act) : nécessite Vibe Diff (résumé humain pré-action) avant exécution "
-          "en production. Le ticket créé est immédiatement visible dans la file de l'agent humain."
+        "Crée un ticket Marina Rentals en base (INSERT). Side-effect non-idempotent par défaut, "
+        "rendu idempotent par fourniture d'un idempotency_key (unique en DB). "
+        "À utiliser APRÈS retrieve_docs + classify_ticket + draft_reply, comme dernière étape du "
+        "workflow agent → ticket. Audit trail : cited_policy_id stocké pour traçabilité de la "
+        "décision agent (quel doc policy a guidé la réponse). Le draft_text est stocké avec "
+        "placeholders [[VAR]] non résolus (Context Hygiene — résolution downstream uniquement). "
+        "ATTENTION (risk_level=act) : nécessite Vibe Diff (résumé humain pré-action) avant exécution "
+        "en production. Le ticket créé est immédiatement visible dans la file de l'agent humain."
       ),
       "risk_level": "act",
       "input_schema": CreateTicketInput.model_json_schema(),
       "output_schema": CreateTicketOutput.model_json_schema(),
-  }
+}
