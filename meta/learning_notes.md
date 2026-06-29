@@ -443,4 +443,92 @@ def reset_index(monkeypatch):
 
 ---
 
+### Concept transversal — Aggregation déterministe vs LLM-as-Judge
+
+**Pourquoi Tool 6 réagrège des données qu'on a déjà** : Tool 5 (`evaluate_answer`) note des drafts un par un — utile au cas par cas, pas pour décider quoi améliorer dans le service. Tool 6 (`generate_report`) prend du recul : combien de tickets sur 7 jours, quelles catégories dominent, est-ce qu'une zone du business mérite une intervention. Décisionnel, pas opérationnel. Les deux outils répondent à deux temporalités différentes : Tool 5 = "qualité de cette réponse" ; Tool 6 = "santé du flux de tickets".
+
+**Pourquoi déterministe (zéro LLM) — contraste avec Tool 5** : un rapport hebdomadaire qui change ses scores entre runs perd toute valeur d'audit. Mêmes inputs → mêmes outputs, toujours. C'est aussi pédagogique : Tool 5 montre le pattern LLM-as-Judge (stochastique, calibré, mis en cache) ; Tool 6 montre le pattern aggregation pure (Counter + règles, pas de prompt, pas de variance). Les deux sont des manières légitimes d'évaluer, pour des questions différentes.
+
+**Read level malgré l'utilité décisionnelle** : Tool 6 lit la DB, calcule, renvoie du Markdown. Aucun side-effect persistant, aucun envoi. Le rapport produit est un **artefact pour humain** — un manager regarde, décide. Pas de Vibe Diff, pas de Semantic Gating. Bounded vs Unbounded (CLAUDE.md §7) : Tool 6 produit des faits + signaux, l'humain décide de l'action.
+
+---
+
+### `evals/report_golden.yaml`
+
+**`template_version` + `rules_version` dans `meta`** (parallèle à `judge_model` + `prompt_version` dans `judge_golden.yaml`) : même pattern AgBOM-au-niveau-golden. Si on bump une version (changement de wording d'une recommandation, ou changement du seuil 40%), le golden doit être re-validé. Pinner les versions dans le golden = documenter sa propre calibration cible, ré-exécutable 6 mois plus tard sans deviner contre quelle version tournait l'attendu.
+
+**5 cases couvrent les 4 règles + edge case bornes** : `empty-period-no-tickets` (R1), `single-category-dominant-cancellation` (R2 fire + R4 NE fire pas), `mixed-categories-balanced` (R4 fire + R2 NE fire pas), `ticket-ids-filter-restricts` (filtre AND), `period-boundary-inclusive` (bornes incluses). Minimum coverage : chaque règle a un cas où elle fire ET au moins un cas où elle ne fire pas (l'absence d'un test "ne fire pas" cache les faux positifs).
+
+**`top_categories_length` + `top_categories_all_count` plutôt que `top_categories` exact** (cas `mixed-categories-balanced`) : à count égal, l'ordre de `Counter.most_common()` dépend de l'ordre d'insertion — implémentation-stable mais sémantiquement arbitraire. Verrouiller un ordre précis entre cancellation/payment/booking/equipment/other à count=2 chacun = test fragile sans gain de garantie. On teste les **invariants vrais** (5 catégories, toutes à 2), pas un ordre par chance. Pour `single-category-dominant-cancellation`, l'ordre EST l'invariant (cancellation en tête) → `top_categories` exact reste légitime.
+
+**`recommendations_contains` (substring) plutôt qu'exact match** : tolère un tweak mineur de wording (un mot ajouté, accord du verbe) sans casser le test. Si on change la **logique** de la règle (seuil 40 → 50), `rules_version` bump → tout est re-validé. Le substring teste **le fait** (la cat dominante est mentionnée, le % est cité) ; le bump teste **la sémantique**. Découpage propre entre micro-tweak et changement de comportement.
+
+**`recommendations_not_contains` (anti-test des règles exclusives)** : R2 et R4 sont mutuellement exclusives — vérifier que R4 fire dans le cas équilibré ne suffit pas, il faut aussi vérifier que R2 NE fire PAS. Sans cet anti-test, un bug "les deux fire en parallèle" passerait. Pattern général : pour chaque règle exclusive, asserter sa présence ET l'absence de ses concurrentes.
+
+**`period-boundary-inclusive` avec tickets exactement à `period_start` et `period_end`** : la convention "inclusif des deux côtés" (style SQL `BETWEEN`) peut se perdre dans un refactor — quelqu'un peut switcher à `>` / `<` "pour être propre". Ce case verrouille la convention dans le code : ticket à `period_start` EST dans la période, ticket à `period_end` AUSSI, tickets à `period_start - 1` et `period_end + 1` exclus. Lock par test, pas par commentaire (qui se perdrait).
+
+---
+
+### `src/sandbox/reporting/builder.py`
+
+**Séparation `reporting/builder.py` ↔ `tools/generate_report.py`** : même pattern que `evaluation/judge.py` ↔ `tools/evaluate_answer.py` et `retrieval/bm25.py` ↔ `tools/retrieve_docs.py`. Logique pure (aggregation + rules + template Markdown) sans Pydantic ni MCP, wrapper MCP minimal qui valide et délègue. Si Phase 5 on remplace les règles R1-R4 par un classifier LLM ou des règles tirées d'une config YAML, `tools/generate_report.py` ne change pas — seul `builder.py` est réécrit.
+
+**`TEMPLATE_VERSION` + `RULES_VERSION` en constantes module-level** : changement de template ou de seuil → bump explicite de la constante → le golden doit être re-validé (sinon les goldens passeront alors qu'ils ne devraient plus). Pattern parallèle à `PROMPT_VERSION` dans `judge.py`. Une seule source de vérité (le code), exportée vers le golden ET stampée dans la sortie du tool — chaque rapport généré emporte sa généalogie.
+
+**`DOMINANT_THRESHOLD_PCT = 40` (nommée, pas inline)** : documentée en commentaire — "2x la part égalitaire pour 5 cats (20%)". Tuner le seuil = éditer une constante, pas chasser un `40` magique dans une fonction. Auto-documenté : un futur lecteur comprend immédiatement la dérivation du chiffre, pas juste "pourquoi 40 et pas 35".
+
+**`CategoryCount(NamedTuple)` interne ; `CategoryCount(BaseModel)` Pydantic au boundary** : NamedTuple = immutable + ~1 ligne, pas de validation runtime à l'intérieur du builder (le builder est appelé par le wrapper qui a déjà validé). Pydantic uniquement à la **frontière** (l'output du tool exposé via MCP). Convention : NamedTuple pour les types internes, Pydantic pour les contrats publics. Évite la sur-pénalité de validation à chaque hop interne — Pydantic n'est pas gratuit (~10× overhead vs NamedTuple sur instanciation).
+
+**`datetime.combine(date, time.min/time.max)` pour les bornes de période** : `period_start: date` (sans heure) doit être converti en `datetime` pour comparer à `Ticket.created_at: datetime`. `time.min` = `00:00:00`, `time.max` = `23:59:59.999999`. Couvre la journée entière des deux côtés. Sans ça, un ticket à `2026-06-07 14:30:00` serait exclu si on filtrait avec `period_end = 2026-06-07 00:00:00`. C'est ce qui implémente la convention "inclusif des deux côtés" verrouillée par le case `period-boundary-inclusive` du golden.
+
+**`Counter.most_common()` (tri stable par count décroissant, ordre d'insertion sur égalité)** : à count égal, l'ordre retourné suit l'ordre d'apparition dans le `Counter`. Avec le `select` SQLAlchemy qui retourne dans l'ordre PK (donc d'insertion), on a un ordre **déterministe** entre runs sur la même DB. Tests reproductibles sans `sorted()` supplémentaire. Le golden encode ce fait via `top_categories` exact pour les cas avec dominante claire, et via `_length` + `_all_count` pour le cas équilibré (où l'ordre arbitraire n'est pas un invariant qu'on veut verrouiller).
+
+**R1 court-circuite R2/R3/R4** : `if n_tickets == 0: return [R1_message]`. Sans le court-circuit, R3 ferait `n_tickets / days = 0` (OK), mais R2 ferait `top.count / n_tickets * 100` → `ZeroDivisionError` (top n'existe pas, n_tickets = 0). Le case `empty-period-no-tickets` du golden encode cette défense — sans lui, un repo sans tickets le weekend casserait le rapport du lundi en silence (exception non interceptée).
+
+**R2 vs R4 mutuellement exclusifs (`if top_pct > 40: R2 else: R4`)** : un même rapport ne peut pas dire "cancellation à 80% — investiguer" ET "distribution équilibrée entre 3 cats" — c'est contradictoire. La structure `if/else` impose l'exclusivité au niveau code, pas seulement au niveau intention. Si demain on ajoute R5 "concentration moyenne" (entre 30-40%), il faudra repenser la structure (sortir du `if/else` binaire) → c'est exactement ce qu'on veut, le compilateur force la réflexion architecturale.
+
+**R3 toujours présent quand `n_tickets > 0`** : volume + moyenne par jour est l'info quantitative de base, jamais conditionnelle. Différent de R2/R4 qui sont des **signaux d'alerte**. Pattern général : info brute toujours présente, alerte conditionnelle. Le manager qui lit le rapport voit d'abord les chiffres, puis éventuellement un signal d'action.
+
+**`_ticket_word(n)` (singulier 0/1, pluriel 2+)** : convention française. Sans ça, "Rapport sur 0 tickets" ou "Rapport sur 1 tickets" — typo immédiate visible par tout francophone. Petite fonction privée, mais elle évite la duplication `f"{n} ticket{'s' if n > 1 else ''}"` dispersée dans `build_summary` et `render_markdown`. DRY + lisibilité (et un seul endroit à corriger si on découvre un cas spécial du français qu'on a oublié).
+
+**Markdown comme template hand-rolled (pas Jinja2 ni un `.md.template`)** : ~20 lignes de `lines.append(...)` + `"\n".join(lines)`. Aucune dep, aucune syntaxe à apprendre, aucun moteur à mocker en test. Trade-off : si le template devient 200 lignes ou avec 5 conditionnels imbriqués, on passera à Jinja2. Pour l'instant, hand-rolled gagne sur la simplicité — et le bump `TEMPLATE_VERSION` permet de gérer les évolutions sans surprise.
+
+---
+
+### `src/sandbox/tools/generate_report.py`
+
+**Délégation pure à `builder.py`** : le tool ne contient **aucune** logique d'aggregation, de règles, ou de rendu — juste validation Pydantic + 6 appels (`fetch_tickets`, `aggregate_categories`, `compute_days`, `build_summary`, `build_recommendations`, `render_markdown`) + repackaging. Même pattern que `evaluate_answer.py` ↔ `judge.py`. Re-implémentation du builder en LLM-driven Phase 5 = zéro changement au contrat MCP.
+
+**`db_session` passé en argument (pas de `SessionLocal()` global)** : Zero Ambient Authority au niveau Python (CLAUDE.md §4 règle 5). Le tool ne va pas chercher la session lui-même → le caller (FastAPI `Depends`, test fixture, REPL) choisit quelle session injecter. Conséquences directes : tests in-memory triviaux (`db_session` fixture pytest), prod via `Depends(get_db)`, REPL via session manuelle. Aucun monkeypatch nécessaire. Même pattern qu'avec `create_ticket.py`.
+
+**`risk_level: "read"` malgré la production d'un artefact "important"** : aucune écriture DB, aucun envoi, aucun appel LLM, idempotent au sens fort (deux appels avec mêmes inputs = même output exact, byte-for-byte). Le Policy Server (Phase 4) ne demandera pas de Vibe Diff. Trade-off d'un tool Read qui produit du contenu : le contenu (rapport Markdown) peut quand même être trompeur s'il est mal lu — c'est précisément pour ça que `template_version` + `rules_version` sont en sortie (l'humain qui lit sait contre quelle version d'aggregation il décide).
+
+**`template_version` + `rules_version` dans `GenerateReportOutput`** : AgBOM stamping en sortie. Chaque rapport emporte sa propre généalogie. Loggué dans la trajectory → si on découvre 3 mois plus tard qu'une décision business a été prise sur un rapport buggé, on peut filtrer la trajectory par `(template_version, rules_version)` pour identifier la cohorte impactée et re-générer **uniquement** ces rapports. Pattern parallèle au stamping `judge_model` + `prompt_version` dans `evaluate_answer`.
+
+**`description` du TOOL_METADATA mentionne "Contraste pédagogique avec evaluate_answer"** : volontaire — c'est un signal pour le LLM agent qui lit le contrat. Sans cette ligne, un agent pourrait confondre les deux ou choisir le mauvais (utiliser `evaluate_answer` pour faire un rapport agrégé, par ex). En écrivant "agrégation pure, zéro LLM, reproductible" on positionne explicitement les deux dans l'écosystème de tools. La `description` n'est pas qu'un commentaire — c'est la **router function** lue par l'agent.
+
+**`ticket_ids: list[str] | None` (filtre optionnel, AND avec période)** : on aurait pu en faire un OR (logique alternative : "donne-moi les tickets de la période OU explicitement listés"), mais c'est un footgun — un agent qui passe `ticket_ids=[...]` voudrait restreindre, pas étendre. La sémantique AND est plus sûre : un ticket hors période est exclu même listé. Documenté en commentaire dans la `description` pour que l'agent ne soit pas surpris.
+
+---
+
+### `tests/test_generate_report.py`
+
+**Golden YAML → tests pytest parametrize avec `ids=[c["id"] ...]`** : 1 source de vérité (`report_golden.yaml`), N tests pytest générés automatiquement. Le rapport pytest affiche `test_generate_report_golden[empty-period-no-tickets]` — l'ID du case devient le diagnostic instantané. Si on ajoute un case au YAML, un test apparaît automatiquement, pas de duplication Python à maintenir. Pattern repris de `test_evaluate_answer.py`.
+
+**`_seed_tickets` met `created_at` à midi (12:00), pas `time.min`/`time.max`** : le builder utilise `time.min`/`time.max` pour les bornes de période. Si on seedait un ticket à `2026-06-01 00:00:00` (= `time.min`), le case `period-boundary-inclusive` serait ambigu — le ticket est-il inclus parce qu'il est >= `2026-06-01 00:00:00` (intention) ou par accident d'alignement temporel ? Midi (12:00) sort de la zone d'ambiguïté, le test mesure le **vrai** comportement attendu (inclusion par date, pas par chance d'alignement).
+
+**Helper `_assert_expected` avec branches conditionnelles par clé** : chaque cas du golden a un sous-ensemble des assertions disponibles — un cas R2 n'a pas besoin de tester `recommendations_not_contains: équilibrée` (déjà encodé), un cas R4 n'a pas besoin de tester `top_categories` exact (déjà encodé via `_length`/`_all_count`). Le helper itère sur les clés présentes et skip silencieusement les absentes. Convention : clé absente dans le golden = "je m'en fous de cet aspect ici", clé présente = "je vérifie". Évite le bruit visuel et les faux invariants.
+
+**Messages d'erreur détaillés (`got X, expected Y`)** : si un test casse, le message contient déjà le diff — pas besoin de relancer en debugger ou print. Pattern repris de `test_evaluate_answer.py` où c'est le `reasoning` du juge qui sert de message. Ici c'est la valeur calculée vs attendue, formatée pour lecture humaine immédiate. Le test doit **se diagnostiquer lui-même** ; idéalement on lit le rapport pytest et on sait quoi corriger sans relancer.
+
+**Fixture `db_session` per-test avec `StaticPool`** : copie exacte du pattern `test_create_ticket.py`. Chaque test a sa propre DB in-memory isolée (~50ms par test pour les 5 cases parametrize). `StaticPool` est crucial : sans lui, chaque connexion SQLAlchemy à `sqlite:///:memory:` crée une nouvelle DB vide → l'INSERT seed et le SELECT du tool ne voient pas la même DB → tests qui passent en mock et castent en vrai DB (footgun classique SQLAlchemy + SQLite).
+
+**`test_output_includes_versioning` (smoke test AgBOM)** : sans ce test, on pourrait oublier de stamper `template_version` ou `rules_version` dans l'output → audit trail muet en aval (la trajectory loggerait `template_version=""` ou `None`). Le test ne valide pas la VALEUR (peu importe que ce soit "v1" ou "v3"), juste la **présence** d'une valeur non-vide. Régression de contrat au niveau AgBOM — pas pédagogique sur la logique, défensif sur l'observabilité.
+
+**`test_tool_metadata_shape` avec `<=` (subset) sur les properties** : Pydantic v2 ajoute parfois `additionalProperties` / `title` / `$defs` selon la version dans le JSON Schema généré. `==` strict casserait à chaque upgrade de Pydantic. `<=` vérifie que **nos** champs sont là, pas qu'il n'y en a pas d'autres. Pattern repris de `test_draft_reply.py` et `test_create_ticket.py`. Convention : tester ce qu'on a écrit, pas ce que la lib génère en plus.
+
+**Pas de mock du builder** : on teste contre la vraie logique. Coût négligeable (in-memory, ~50ms par test). Bénéfice : on teste le **comportement** du tool en bout-en-bout, pas un mock fidèle à un autre mock. Si on remplace `builder.py` par un autre algo (LLM, config-driven, autre), les tests valident encore — c'est ce qui les rend **EDD-compliant** : ils définissent le comportement attendu, pas l'implémentation actuelle. Tautologie évitée.
+
+---
+
 ## Phase 3 — *(à compléter)*

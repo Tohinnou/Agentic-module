@@ -1,0 +1,156 @@
+meta:
+    version: "0.1.0"
+    tool: generate_report
+    risk_level: read
+    template_version: "v1"     # version du template Markdown — bump → invalider tous les goldens
+    rules_version: "v1"        # version des règles heuristiques (R1-R4) — bump → invalider tous les goldens
+    determinism: full          # aucun LLM ; agrégation pure (contraste pédagogique avec Tool 5)
+
+# Règles heuristiques (rules_version: v1)
+#
+# R1 (empty)    : si n_tickets == 0
+#                  → recommendation: "Aucun ticket sur la période ; vérifier l'ingestion."
+#
+# R2 (dominant) : si la catégorie de tête > 40% du total
+#                  → recommendation: "La catégorie {X} représente {N}% des tickets ; investiguer."
+#                  → seuil 40 : 2x la part égalitaire pour 5 catégories (20%) — signal "clairement anormal".
+#
+# R3 (volume)   : toujours présente si n_tickets > 0
+#                  → recommendation: "Volume total : {N} tickets sur {D} jours."
+#
+# R4 (balanced) : si n_tickets > 0 et aucune catégorie ne dépasse 40%
+#                  → recommendation: "Distribution équilibrée entre {K} catégories."
+#
+# Champs `expected` :
+#   - `top_categories`              : match exact (liste ordonnée décroissante par count)
+#   - `top_categories_length`       : match exact (utilisé quand l'ordre interne n'importe pas)
+#   - `top_categories_all_count`    : tous les counts égalent cette valeur (cas équilibré)
+#   - `summary_contains`            : liste de substrings que summary doit contenir
+#   - `recommendations_contains`    : liste de substrings, AU MOINS UNE recommandation contient chacune
+#   - `recommendations_not_contains`: liste de substrings, AUCUNE recommandation ne doit contenir
+#   - `report_markdown_contains`    : liste de substrings que report_markdown doit contenir
+
+cases:
+    - id: empty-period-no-tickets
+      description: "Période sans aucun ticket. R1 doit firer, le tool ne doit pas crasher (zéro division)."
+      given:
+          tickets: []
+      input:
+          period_start: "2026-06-01"
+          period_end: "2026-06-07"
+      expected:
+          top_categories: []
+          summary_contains: ["0 ticket"]
+          recommendations_contains:
+              - "Aucun ticket"   # R1
+          recommendations_not_contains:
+              - "investiguer"    # R2 ne doit PAS firer
+              - "équilibrée"     # R4 ne doit PAS firer
+          report_markdown_contains:
+              - "# Rapport"
+              - "Volume"
+      notes: "Edge case prioritaire. Sans ce cas, le code risque ZeroDivisionError sur le calcul de pourcentage."
+
+    - id: single-category-dominant-cancellation
+      description: "8/10 tickets en cancellation. R2 doit firer avec catégorie + pourcentage."
+      given:
+          tickets:
+              - {category: cancellation, created_at: "2026-06-02"}
+              - {category: cancellation, created_at: "2026-06-02"}
+              - {category: cancellation, created_at: "2026-06-03"}
+              - {category: cancellation, created_at: "2026-06-03"}
+              - {category: cancellation, created_at: "2026-06-04"}
+              - {category: cancellation, created_at: "2026-06-04"}
+              - {category: cancellation, created_at: "2026-06-05"}
+              - {category: cancellation, created_at: "2026-06-05"}
+              - {category: payment, created_at: "2026-06-06"}
+              - {category: equipment, created_at: "2026-06-06"}
+      input:
+          period_start: "2026-06-01"
+          period_end: "2026-06-07"
+      expected:
+          top_categories:
+              - {category: cancellation, count: 8}
+              - {category: payment, count: 1}
+              - {category: equipment, count: 1}
+          summary_contains: ["10 tickets"]
+          recommendations_contains:
+              - "cancellation"   # R2 : catégorie mentionnée
+              - "80"             # R2 : pourcentage
+              - "investiguer"    # R2 : mot-clé d'action
+          recommendations_not_contains:
+              - "équilibrée"     # R4 ne doit PAS firer
+          report_markdown_contains:
+              - "cancellation"
+              - "80"
+      notes: "Test crucial de R2. 80% = clairement dominant. top_categories trié décroissant par count."
+
+    - id: mixed-categories-balanced
+      description: "5 catégories équipotentes (20% chacune). R4 doit firer, R2 ne doit PAS firer."
+      given:
+          tickets:
+              - {category: cancellation, created_at: "2026-06-02"}
+              - {category: cancellation, created_at: "2026-06-02"}
+              - {category: payment, created_at: "2026-06-03"}
+              - {category: payment, created_at: "2026-06-03"}
+              - {category: booking, created_at: "2026-06-04"}
+              - {category: booking, created_at: "2026-06-04"}
+              - {category: equipment, created_at: "2026-06-05"}
+              - {category: equipment, created_at: "2026-06-05"}
+              - {category: other, created_at: "2026-06-06"}
+              - {category: other, created_at: "2026-06-06"}
+      input:
+          period_start: "2026-06-01"
+          period_end: "2026-06-07"
+      expected:
+          top_categories_length: 5
+          top_categories_all_count: 2
+          summary_contains: ["10 tickets"]
+          recommendations_contains:
+              - "équilibrée"     # R4
+              - "5"              # nombre de catégories
+          recommendations_not_contains:
+              - "investiguer"    # R2 ne doit PAS firer
+      notes: "Test crucial de R4 (et anti-R2). Distribution parfaitement équilibrée."
+
+    - id: ticket-ids-filter-restricts
+      description: "10 tickets dans la période, mais ticket_ids ne garde que 3. L'agrégation ne porte que sur ces 3."
+      given:
+          tickets:
+              - {ticket_id: "t1", category: cancellation, created_at: "2026-06-02"}
+              - {ticket_id: "t2", category: cancellation, created_at: "2026-06-02"}
+              - {ticket_id: "t3", category: payment, created_at: "2026-06-03"}
+              - {ticket_id: "t4", category: payment, created_at: "2026-06-03"}
+              - {ticket_id: "t5", category: booking, created_at: "2026-06-04"}
+              - {ticket_id: "t6", category: booking, created_at: "2026-06-04"}
+              - {ticket_id: "t7", category: equipment, created_at: "2026-06-05"}
+              - {ticket_id: "t8", category: equipment, created_at: "2026-06-05"}
+              - {ticket_id: "t9", category: other, created_at: "2026-06-06"}
+              - {ticket_id: "t10", category: other, created_at: "2026-06-06"}
+      input:
+          period_start: "2026-06-01"
+          period_end: "2026-06-07"
+          ticket_ids: ["t1", "t3", "t5"]
+      expected:
+          top_categories_length: 3
+          summary_contains: ["3 tickets"]
+          recommendations_not_contains:
+              - "investiguer"    # 33% chacun, aucune dominante
+      notes: "Filtre ticket_ids appliqué par-dessus le filtre période (AND, pas OR). Si t1 était hors période, il serait exclu malgré la liste."
+
+    - id: period-boundary-inclusive
+      description: "Tickets à period_start et period_end inclus ; tickets hors période exclus."
+      given:
+          tickets:
+              - {ticket_id: "t1", category: cancellation, created_at: "2026-06-01"}   # = period_start
+              - {ticket_id: "t2", category: payment, created_at: "2026-06-04"}         # milieu
+              - {ticket_id: "t3", category: booking, created_at: "2026-06-07"}         # = period_end
+              - {ticket_id: "t4", category: equipment, created_at: "2026-05-31"}       # AVANT → exclu
+              - {ticket_id: "t5", category: other, created_at: "2026-06-08"}           # APRÈS → exclu
+      input:
+          period_start: "2026-06-01"
+          period_end: "2026-06-07"
+      expected:
+          top_categories_length: 3
+          summary_contains: ["3 tickets"]
+      notes: "Convention : period_start et period_end inclusifs des deux côtés (BETWEEN SQL standard). Lock cette convention dans le code."
