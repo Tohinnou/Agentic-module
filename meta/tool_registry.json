@@ -1,0 +1,602 @@
+{
+  "meta": {
+    "generated_at": "2026-06-29T17:56:34.624500+00:00",
+    "generator_version": "0.1.0",
+    "python_version": "3.13.0",
+    "tool_count": 6
+  },
+  "tools": [
+    {
+      "name": "classify_ticket",
+      "description": "Classe un ticket support Marina Rentals en (catégorie, priorité, confidence). À utiliser au premier contact pour router le ticket vers le bon flow et déterminer l'urgence avant de répondre. Catégories : cancellation, payment, booking, safety, weather, equipment, damage, other. Priorités : urgent, high, normal, low.",
+      "risk_level": "read",
+      "input_schema": {
+        "properties": {
+          "text": {
+            "description": "Texte du ticket (sujet + corps mergés par le caller).",
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ClassifyTicketInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "category": {
+            "enum": [
+              "cancellation",
+              "payment",
+              "booking",
+              "safety",
+              "weather",
+              "equipment",
+              "damage",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "priority": {
+            "enum": [
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "matched_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matched Keywords",
+            "type": "array"
+          }
+        },
+        "required": [
+          "category",
+          "priority",
+          "confidence",
+          "matched_keywords"
+        ],
+        "title": "ClassifyTicketOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.classify_ticket"
+    },
+    {
+      "name": "evaluate_answer",
+      "description": "Note un brouillon de réponse client sur 7 dimensions (0-5) via LLM-as-judge : clarté, exactitude, ton, sécurité, complétude, concision, pertinence. Read-only : aucun side-effect DB. Utilise un cache fichier (data/judge_cache.json) keyé sur (model, prompt_version, payload) → 1er run = appel API (~5s), runs suivants instantanés. À utiliser APRÈS draft_reply pour décider si le brouillon est envoyable ou nécessite une réécriture humaine. Trail d'audit complet via judge_model + prompt_version en sortie.",
+      "risk_level": "read",
+      "input_schema": {
+        "properties": {
+          "customer_request": {
+            "description": "Demande textuelle du client.",
+            "minLength": 1,
+            "title": "Customer Request",
+            "type": "string"
+          },
+          "category": {
+            "description": "Catégorie du ticket (sortie de classify_ticket).",
+            "enum": [
+              "cancellation",
+              "payment",
+              "booking",
+              "safety",
+              "weather",
+              "equipment",
+              "damage",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "cited_policy_id": {
+            "description": "ID du doc de policy cité (audit trail).",
+            "minLength": 1,
+            "title": "Cited Policy Id",
+            "type": "string"
+          },
+          "cited_policy_excerpt": {
+            "description": "Extrait textuel de la policy cité par l'agent.",
+            "minLength": 1,
+            "title": "Cited Policy Excerpt",
+            "type": "string"
+          },
+          "draft_reply": {
+            "description": "Brouillon de réponse rédigé par l'agent.",
+            "minLength": 1,
+            "title": "Draft Reply",
+            "type": "string"
+          }
+        },
+        "required": [
+          "customer_request",
+          "category",
+          "cited_policy_id",
+          "cited_policy_excerpt",
+          "draft_reply"
+        ],
+        "title": "EvaluateAnswerInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "clarte": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Clarte",
+            "type": "integer"
+          },
+          "exactitude": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Exactitude",
+            "type": "integer"
+          },
+          "ton": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Ton",
+            "type": "integer"
+          },
+          "securite": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Securite",
+            "type": "integer"
+          },
+          "completude": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Completude",
+            "type": "integer"
+          },
+          "concision": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Concision",
+            "type": "integer"
+          },
+          "pertinence": {
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Pertinence",
+            "type": "integer"
+          },
+          "reasoning": {
+            "description": "Justification courte des notes basses ou limites.",
+            "title": "Reasoning",
+            "type": "string"
+          },
+          "judge_model": {
+            "description": "Modèle pinné utilisé (AgBOM trail).",
+            "title": "Judge Model",
+            "type": "string"
+          },
+          "prompt_version": {
+            "description": "Version du prompt utilisé (calibration trail).",
+            "title": "Prompt Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clarte",
+          "exactitude",
+          "ton",
+          "securite",
+          "completude",
+          "concision",
+          "pertinence",
+          "reasoning",
+          "judge_model",
+          "prompt_version"
+        ],
+        "title": "EvaluateAnswerOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.evaluate_answer"
+    },
+    {
+      "name": "generate_report",
+      "description": "Génère un rapport déterministe des tickets sur une période donnée. Agrège par catégorie + applique 4 règles heuristiques versionnées. Read-only : aucun side-effect DB. Optionnel filtre ticket_ids (AND avec période). Contraste pédagogique avec evaluate_answer : agrégation pure, zéro LLM, reproductible. Trail : template_version + rules_version en sortie.",
+      "risk_level": "read",
+      "input_schema": {
+        "properties": {
+          "period_start": {
+            "description": "Start date of the report period",
+            "format": "date",
+            "title": "Period Start",
+            "type": "string"
+          },
+          "period_end": {
+            "description": "End date of the report period",
+            "format": "date",
+            "title": "Period End",
+            "type": "string"
+          },
+          "ticket_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional list of ticket IDs to filter",
+            "title": "Ticket Ids"
+          }
+        },
+        "required": [
+          "period_start",
+          "period_end"
+        ],
+        "title": "GenerateReportInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "CategoryCount": {
+            "properties": {
+              "category": {
+                "description": "Category name",
+                "title": "Category",
+                "type": "string"
+              },
+              "count": {
+                "description": "Count of tickets in the category",
+                "title": "Count",
+                "type": "integer"
+              }
+            },
+            "required": [
+              "category",
+              "count"
+            ],
+            "title": "CategoryCount",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "template_version": {
+            "description": "Version of the report template",
+            "title": "Template Version",
+            "type": "string"
+          },
+          "rules_version": {
+            "description": "Version of the rules used for aggregation",
+            "title": "Rules Version",
+            "type": "string"
+          },
+          "summary": {
+            "description": "Summary of the report",
+            "title": "Summary",
+            "type": "string"
+          },
+          "recommendations": {
+            "description": "Recommendations based on the report data",
+            "items": {
+              "type": "string"
+            },
+            "title": "Recommendations",
+            "type": "array"
+          },
+          "report_markdown": {
+            "description": "Rendered Markdown report",
+            "title": "Report Markdown",
+            "type": "string"
+          },
+          "top_categories": {
+            "description": "List of top categories with counts",
+            "items": {
+              "$ref": "#/$defs/CategoryCount"
+            },
+            "title": "Top Categories",
+            "type": "array"
+          }
+        },
+        "required": [
+          "template_version",
+          "rules_version",
+          "summary",
+          "recommendations",
+          "report_markdown",
+          "top_categories"
+        ],
+        "title": "GenerateReportOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.generate_report"
+    },
+    {
+      "name": "retrieve_docs",
+      "description": "Cherche dans les policies Marina Rentals (annulation, paiement, sécurité, météo, équipements, etc.). À utiliser quand le client pose une question factuelle dont la réponse est dans la documentation interne.",
+      "risk_level": "read",
+      "input_schema": {
+        "description": "Input model for retrieving documents based on a query.",
+        "properties": {
+          "query": {
+            "description": "The search query string.",
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 3,
+            "description": "Number of top documents to retrieve.",
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Top K",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "RetrieveDocsInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "$defs": {
+          "RetrieveDoc": {
+            "description": "Model representing a retrieved document.",
+            "properties": {
+              "doc_id": {
+                "title": "Doc Id",
+                "type": "string"
+              },
+              "content": {
+                "title": "Content",
+                "type": "string"
+              },
+              "score": {
+                "title": "Score",
+                "type": "number"
+              }
+            },
+            "required": [
+              "doc_id",
+              "content",
+              "score"
+            ],
+            "title": "RetrieveDoc",
+            "type": "object"
+          }
+        },
+        "description": "Output model for retrieved documents.",
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/$defs/RetrieveDoc"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "RetrieveDocsOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.retrieve_docs"
+    },
+    {
+      "name": "draft_reply",
+      "description": "Génère un brouillon de réponse client Marina Rentals à partir de la catégorie et de la priorité (sortie de classify_ticket) et de l'ID du doc policy (sortie de retrieve_docs). Le draft contient des placeholders [[VAR]] non résolus (CUSTOMER_NAME, BOOKING_ID, AGENT_NAME, etc.) à substituer par un tool downstream avant tout envoi. À utiliser APRÈS classify_ticket et retrieve_docs, AVANT tout tool d'envoi. Le draft DOIT être relu et approuvé par un humain (HITL: Human in the Loop) avant envoi effectif au client. Tone retourné : formal, empathetic, urgent, neutral.",
+      "risk_level": "draft",
+      "input_schema": {
+        "properties": {
+          "category": {
+            "enum": [
+              "cancellation",
+              "payment",
+              "booking",
+              "safety",
+              "weather",
+              "equipment",
+              "damage",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "priority": {
+            "enum": [
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "policy_doc_id": {
+            "description": "ID du doc de policy cité (sortie de retrieve_docs). Conservé en audit trail, non inséré dans le draft.",
+            "minLength": 1,
+            "title": "Policy Doc Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "priority",
+          "policy_doc_id"
+        ],
+        "title": "DraftReplyInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "draft_text": {
+            "title": "Draft Text",
+            "type": "string"
+          },
+          "placeholders": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Placeholders",
+            "type": "array"
+          },
+          "tone": {
+            "enum": [
+              "formal",
+              "empathetic",
+              "urgent",
+              "neutral"
+            ],
+            "title": "Tone",
+            "type": "string"
+          },
+          "cited_policy_id": {
+            "title": "Cited Policy Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "draft_text",
+          "placeholders",
+          "tone",
+          "cited_policy_id"
+        ],
+        "title": "DraftReplyOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.draft_reply"
+    },
+    {
+      "name": "create_ticket",
+      "description": "Crée un ticket Marina Rentals en base (INSERT). Side-effect non-idempotent par défaut, rendu idempotent par fourniture d'un idempotency_key (unique en DB). À utiliser APRÈS retrieve_docs + classify_ticket + draft_reply, comme dernière étape du workflow agent → ticket. Audit trail : cited_policy_id stocké pour traçabilité de la décision agent (quel doc policy a guidé la réponse). Le draft_text est stocké avec placeholders [[VAR]] non résolus (Context Hygiene — résolution downstream uniquement). ATTENTION (risk_level=act) : nécessite Vibe Diff (résumé humain pré-action) avant exécution en production. Le ticket créé est immédiatement visible dans la file de l'agent humain.",
+      "risk_level": "act",
+      "input_schema": {
+        "properties": {
+          "subject": {
+            "description": "Sujet du ticket (ex: 'Problème de paiement').",
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          },
+          "category": {
+            "description": "Catégorie du ticket (sortie de classify_ticket).",
+            "enum": [
+              "cancellation",
+              "payment",
+              "booking",
+              "safety",
+              "weather",
+              "equipment",
+              "damage",
+              "other"
+            ],
+            "title": "Category",
+            "type": "string"
+          },
+          "priority": {
+            "description": "Priorité du ticket (sortie de classify_ticket).",
+            "enum": [
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ],
+            "title": "Priority",
+            "type": "string"
+          },
+          "cited_policy_id": {
+            "description": "ID du doc de policy cité (sortie de retrieve_docs).",
+            "minLength": 1,
+            "title": "Cited Policy Id",
+            "type": "string"
+          },
+          "draft_text": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Draft Text"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Idempotency Key"
+          }
+        },
+        "required": [
+          "subject",
+          "category",
+          "priority",
+          "cited_policy_id"
+        ],
+        "title": "CreateTicketInput",
+        "type": "object"
+      },
+      "output_schema": {
+        "properties": {
+          "ticket_id": {
+            "description": "ID du ticket créé (UUID).",
+            "title": "Ticket Id",
+            "type": "string"
+          },
+          "status": {
+            "description": "Statut initial du ticket (ex: 'new').",
+            "title": "Status",
+            "type": "string"
+          },
+          "idempotency_replay": {
+            "description": "True si le ticket a déjà été créé avec le même idempotency_key.",
+            "title": "Idempotency Replay",
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "Timestamp de création du ticket.",
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "status",
+          "idempotency_replay",
+          "created_at"
+        ],
+        "title": "CreateTicketOutput",
+        "type": "object"
+      },
+      "module": "sandbox.tools.create_ticket"
+    }
+  ]
+}
