@@ -1,0 +1,72 @@
+
+{
+  "spec_version": "a2a-0.2-sandbox",
+  "agent": {
+    "name": "security_reviewer_agent",
+    "description": "Intercepteur qui inspecte chaque tool call avant exécution. Deux couches : Structural Gating (allow-list déterministe par rôle/env) puis Semantic Gating (LLM-judge pour détecter PII, prompt injection, actions hors scope). Peut bloquer ou exiger HITL — ne peut jamais modifier la requête inspectée.",
+    "version": "0.1.0",
+    "provider": "Marina Rentals (fictif)",
+    "documentation": "src/sandbox/policy_server/ (à créer en Phase 6)"
+  },
+  "capabilities": {
+    "streaming": false,
+    "push_notifications": false,
+    "trajectory_history": true,
+    "can_block": true
+  },
+  "authentication": {
+    "schemes": [],
+    "note": "Sandbox — pas d'auth ; en prod, prévoir OAuth2 + JIT Token Downscoping (Day 4)."
+  },
+  "default_input_modes": ["application/json"],
+  "default_output_modes": ["application/json"],
+  "skills": [
+    {
+      "id": "inspect_tool_call",
+      "name": "Inspect a pending tool call",
+      "description": "Analyse un tool call en attente d'exécution : allow-list role/env (structural), inspection du payload pour PII/injection/hors-scope (semantic). Retourne un verdict {allow, block, hitl_required} accompagné d'un rationale textuel.",
+      "tags": ["security", "policy", "gating", "guardrail", "structural", "semantic"],
+      "examples": [
+        "Est-ce que support_agent a le droit d'appeler create_ticket ?",
+        "Ce payload de retrieve_docs contient-il une prompt injection ?",
+        "Ce draft cite-t-il une politique qui n'existe pas dans docs/ ?"
+      ],
+      "input_modes": ["application/json"],
+      "output_modes": ["application/json"]
+    },
+    {
+      "id": "audit_agbom_compliance",
+      "name": "Audit AgBOM compliance",
+      "description": "Vérifie qu'aucun modèle/MCP/skill/dep utilisée en runtime n'est absente de meta/AgBOM.json (anti-Slopsquatting, anti-MCP Spoofing). Read-only, jamais bloquant en direct — produit un rapport.",
+      "tags": ["security", "supply-chain", "agbom", "slopsquatting", "mcp-spoofing"],
+      "examples": [
+        "Ce nouveau module Python est-il dans AgBOM ?",
+        "Aucun MCP non-listé n'a été appelé cette semaine ?"
+      ],
+      "input_modes": ["application/json"],
+      "output_modes": ["application/json"],
+      "implementation_status": "planned"
+    }
+  ],
+  "sandbox_extensions": {
+    "authority_ladder": {
+      "read": true,
+      "draft": false,
+      "act": false
+    },
+    "special_powers": {
+      "can_block": true,
+      "can_require_hitl": true,
+      "can_modify_request": false
+    },
+    "allowed_tools": [],
+    "planned_tools": [
+      "structural_gate",
+      "semantic_gate"
+    ],
+    "pipeline_mode": "intercept",
+    "hitl_guarantee": "Ne modifie jamais la requête inspectée ; produit uniquement un verdict. Si 'block', l'action est refusée avec rationale. Si 'hitl_required', l'action attend une approbation humaine explicite (Vibe Diff).",
+    "trajectory_sink_default": "trajectories/security_reviewer_agent.jsonl",
+    "implemented_by": "sandbox.policy_server.SecurityReviewer (à créer Phase 6)"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "spec_version": "a2a-0.2-sandbox",
+  "agent": {
+    "name": "evaluator_agent",
+    "description": "Audite la qualité des réponses produites par d'autres agents (support_agent notamment) : clarté, exactitude, ton, sécurité, ancrage aux sources. Read-only strict — ne produit aucun artefact adressé au client, uniquement des notes internes destinées à la revue humaine ou à un dashboard.",
+    "version": "0.1.0",
+    "provider": "Marina Rentals (fictif)",
+    "documentation": "src/sandbox/agents/evaluator.py (à créer en Phase 8)"
+  },
+  "capabilities": {
+    "streaming": false,
+    "push_notifications": false,
+    "trajectory_history": true
+  },
+  "authentication": {
+    "schemes": [],
+    "note": "Sandbox — pas d'auth ; en prod, prévoir OAuth2 + JIT Token Downscoping (Day 4)."
+  },
+  "default_input_modes": ["application/json"],
+  "default_output_modes": ["application/json"],
+  "skills": [
+    {
+      "id": "grade_answer",
+      "name": "Grade answer quality",
+      "description": "Note un draft de réponse client sur 4 dimensions (clarté, exactitude, ton, sécurité) via LLM-as-judge, en s'appuyant sur la politique citée. Ne modifie pas le draft — retourne un score structuré + un rationale textuel.",
+      "tags": ["evaluation", "quality", "llm-judge", "grading"],
+      "examples": [
+        "Évalue ce draft de réponse d'annulation par rapport à cancellation_policy.md",
+        "Note ce brouillon Marina Rentals sur clarté/exactitude/ton/sécurité",
+        "Ce draft respecte-t-il le ton attendu pour un ticket 'urgent' ?"
+      ],
+      "input_modes": ["application/json"],
+      "output_modes": ["application/json"]
+    },
+    {
+      "id": "audit_trajectory",
+      "name": "Audit agent trajectory",
+      "description": "Analyse un ou plusieurs JSONL de trajectoires d'agents pour détecter intent drift, sur-invocation de tools, durations anormales, patterns de dégradation sur une population de tours. Post-hoc, jamais en ligne.",
+      "tags": ["audit", "trajectory", "intent-drift", "post-hoc"],
+      "examples": [
+        "Analyse les trajectoires de la dernière semaine — y a-t-il dérive ?",
+        "Est-ce qu'un tool est appelé anormalement souvent sur ces 100 tours ?",
+        "Détecte les runs qui ont dépassé 5s de latence cumulée"
+      ],
+      "input_modes": ["application/json"],
+      "output_modes": ["application/json"],
+      "implementation_status": "planned"
+    }
+  ],
+  "sandbox_extensions": {
+    "authority_ladder": {
+      "read": true,
+      "draft": false,
+      "act": false
+    },
+    "allowed_tools": [
+      "evaluate_answer"
+    ],
+    "planned_tools": [
+      "audit_trajectory"
+    ],
+    "pipeline_mode": "on_demand",
+    "hitl_guarantee": "L'evaluator produit des notes chiffrées et du texte de rationale ; il ne rédige aucune réponse adressée au client. Ses recommandations sont indicatives, la décision opérationnelle reste humaine.",
+    "trajectory_sink_default": "trajectories/evaluator_agent.jsonl",
+    "implemented_by": "sandbox.agents.evaluator.EvaluatorAgent (à créer Phase 8)"
+  }
+}

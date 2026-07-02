@@ -1,0 +1,59 @@
+{
+  "spec_version": "a2a-0.2-sandbox",
+  "agent": {
+    "name": "support_agent",
+    "description": "Répond aux tickets support Marina Rentals via un pipeline bounded en 4 étapes (classify → retrieve → draft → evaluate). HITL préservé : le brouillon est rendu BRUT avec les placeholders [[VAR]] non résolus, jamais envoyé automatiquement au client.",
+    "version": "0.1.0",
+    "provider": "Marina Rentals (fictif)",
+    "documentation": "src/sandbox/agents/orchestrator.py"
+  },
+  "capabilities": {
+    "streaming": false,
+    "push_notifications": false,
+    "trajectory_history": true
+  },
+  "authentication": {
+    "schemes": [],
+    "note": "Sandbox — pas d'auth ; en prod, prévoir OAuth2 + JIT Token Downscoping (Day 4)."
+  },
+  "default_input_modes": ["text/plain"],
+  "default_output_modes": ["application/json"],
+  "skills": [
+    {
+      "id": "handle_support_ticket",
+      "name": "Handle support ticket",
+      "description": "Traite un ticket client Marina Rentals de bout en bout : classification, récupération de politique, rédaction de brouillon HITL, auto-évaluation optionnelle.",
+      "tags": ["support", "customer", "cancellation", "booking", "payment", "safety", "weather", "equipment"],
+      "examples": [
+        "Je veux annuler ma réservation dans 48h, quels sont mes droits ?",
+        "Ma carte n'a pas été débitée pour la réservation, que faire ?",
+        "Est-ce que je peux annuler à cause de la météo ?"
+      ],
+      "input_modes": ["text/plain"],
+      "output_modes": ["application/json"]
+    }
+  ],
+  "sandbox_extensions": {
+    "authority_ladder": {
+      "read": true,
+      "draft": true,
+      "act": false
+    },
+    "allowed_tools": [
+      "classify_ticket",
+      "retrieve_docs",
+      "draft_reply",
+      "evaluate_answer"
+    ],
+    "pipeline_mode": "fixed",
+    "pipeline_steps": [
+      "classify_ticket",
+      "retrieve_docs",
+      "draft_reply",
+      "evaluate_answer"
+    ],
+    "hitl_guarantee": "Le brouillon est rendu BRUT avec les [[VAR]] intacts. L'agent ne peut pas envoyer de message ; seul un humain peut substituer les placeholders et déclencher l'envoi.",
+    "trajectory_sink_default": "trajectories/support_agent.jsonl",
+    "implemented_by": "sandbox.agents.orchestrator.SupportAgent"
+  }
+}
