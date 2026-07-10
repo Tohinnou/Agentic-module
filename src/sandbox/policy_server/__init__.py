@@ -126,11 +126,26 @@ def check(
             layer_triggered="structural",
         )
 
-    # Structural ALLOW → passer au Semantic Gate (Phase 6.2)
-    raise NotImplementedError(
-        f"Structural allow pour {agent}:{env}:{tool}. "
-        "Semantic Gate à implémenter en Phase 6.2 (voir PROJECT.MD)."
-    )
+    # Layer 2 : Semantic Gate (Phase 6.2 — implémenté)
+    from .semantic_gate import check_semantic
+
+    semantic = check_semantic(tool, payload, user_message)
+
+    if semantic.verdict == "block":
+        # BLOCK sémantique est final — pas de vibe_diff (BLOCK ≠ HITL).
+        return semantic
+
+    if semantic.verdict == "hitl_required":
+        # HITL sémantique : générer vibe_diff selon la catégorie détectée.
+        return PolicyDecision(
+            verdict="hitl_required",
+            reason=semantic.reason,
+            vibe_diff=_stub_vibe_diff_for_semantic(semantic.reason, tool, payload, user_message),
+            layer_triggered="semantic",
+        )
+
+    # Semantic ALLOW → verdict final
+    return semantic
 
 
 def _stub_vibe_diff_for_act_tool(tool: str, payload: dict) -> str:
@@ -165,6 +180,50 @@ def _short_payload_summary(payload: dict, max_chars: int = 100) -> str:
 def _truncate(value: Any, max_chars: int = 30) -> str:  # noqa: ANN401 — accepte tout type
     s = str(value)
     return s if len(s) <= max_chars else s[: max_chars - 3] + "..."
+
+
+def _stub_vibe_diff_for_semantic(
+    reason: str, tool: str, payload: dict, user_message: str
+) -> str:
+    """
+    Placeholder Vibe Diff pour Semantic HITL (Phase 6.2 stub, Phase 6.3 refactor).
+
+    Utilise 3 templates simplifiés issus de `meta/vibe_diff_checklist.md`.
+    Phase 6.3 extraira dans un vrai module `vibe_diff.py` avec les
+    4 templates complets + validation regex des anti-patterns.
+
+    Contrainte : ≤ 350 caractères, ≤ 5 lignes.
+    """
+    if reason == "pii_leak_risk":
+        lines = [
+            "Payload contient des PII en clair (email/téléphone/ID).",
+            "Convention : ces valeurs devraient être des placeholders [[VAR]].",
+            "Approuver si test/dev local, sinon corriger.",
+            "[Approuver] [Rejeter]",
+        ]
+    elif reason == "policy_conflict":
+        lines = [
+            f"Draft {tool} en désaccord avec les sources citées.",
+            "Un humain doit trancher (force majeure ? cas spécial ?).",
+            "[Approuver] [Rejeter et refaire]",
+        ]
+    elif reason == "exclusion_with_business_context":
+        lines = [
+            "Filtre d'exclusion demandé avec raison opérationnelle.",
+            f"Message : \"{_truncate(user_message, 80)}\".",
+            "Humain valide la légitimité de l'exclusion.",
+            "[Approuver] [Rapport complet]",
+        ]
+    else:
+        # Fallback pour catégories non anticipées (défense)
+        lines = [
+            f"HITL requis : {reason}.",
+            f"Tool : {tool}.",
+            "[Approuver] [Rejeter]",
+        ]
+
+    result = "\n".join(lines)
+    return result if len(result) <= 350 else result[:347] + "..."
 
 
 __all__ = ["check", "PolicyDecision", "Verdict", "Layer"]

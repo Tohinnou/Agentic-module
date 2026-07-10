@@ -35,6 +35,7 @@ data/*.db
 trajectories/*.jsonl
 !trajectories/.gitkeep
 data/judge_cache.json
+data/policy_semantic_cache.json
 # Local backups (ne pas commit)
 src.zip
 *.zip.bak
