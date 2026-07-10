@@ -21,7 +21,7 @@ ne sont pas complétées.
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 Verdict = Literal["allow", "block", "hitl_required"]
@@ -107,13 +107,64 @@ def check(
         >>> decision.verdict
         'allow'
     """
+    # Layer 1 : Structural Gate (Phase 6.1 — implémenté)
+    from .structural_gate import check_structural
+
+    structural = check_structural(agent, env, tool)
+
+    if structural.verdict == "block":
+        # BLOCK est final — pas d'appel Semantic.
+        return structural
+
+    if structural.verdict == "hitl_required":
+        # HITL structural (act default) : on enrichit le vibe_diff avec
+        # un stub temporaire. Phase 6.3 remplacera par vibe_diff.generate().
+        return PolicyDecision(
+            verdict="hitl_required",
+            reason=structural.reason,
+            vibe_diff=_stub_vibe_diff_for_act_tool(tool, payload),
+            layer_triggered="structural",
+        )
+
+    # Structural ALLOW → passer au Semantic Gate (Phase 6.2)
     raise NotImplementedError(
-        "Phase 6.0 pose les contrats. "
-        "Phase 6.1 implémente structural_gate. "
-        "Phase 6.2 implémente semantic_gate. "
-        "Phase 6.3 implémente vibe_diff. "
-        "Voir PROJECT.MD Phase 6 pour la roadmap."
+        f"Structural allow pour {agent}:{env}:{tool}. "
+        "Semantic Gate à implémenter en Phase 6.2 (voir PROJECT.MD)."
     )
+
+
+def _stub_vibe_diff_for_act_tool(tool: str, payload: dict) -> str:
+    """
+    Placeholder Vibe Diff pour tools `act` en HITL structural (Phase 6.1).
+
+    Phase 6.3 remplacera cette fonction par `vibe_diff.generate()` qui
+    utilisera les 4 templates fixes de `meta/vibe_diff_checklist.md`.
+
+    Contrainte : output ≤ 350 caractères, ≤ 5 lignes.
+    """
+    detail = _short_payload_summary(payload)
+    lines = [
+        f"Action : invoquer {tool}.",
+        f"Détails : {detail}.",
+        "⚠ Cette action est irréversible.",
+        "[Approuver] [Rejeter]",
+    ]
+    return "\n".join(lines)
+
+
+def _short_payload_summary(payload: dict, max_chars: int = 100) -> str:
+    """Résumé du payload sur une ligne (≤ max_chars caractères)."""
+    if not payload:
+        return "aucun paramètre"
+    pairs = list(payload.items())[:3]
+    parts = [f"{k}={_truncate(v)}" for k, v in pairs]
+    summary = ", ".join(parts)
+    return summary if len(summary) <= max_chars else summary[: max_chars - 3] + "..."
+
+
+def _truncate(value: Any, max_chars: int = 30) -> str:  # noqa: ANN401 — accepte tout type
+    s = str(value)
+    return s if len(s) <= max_chars else s[: max_chars - 3] + "..."
 
 
 __all__ = ["check", "PolicyDecision", "Verdict", "Layer"]
