@@ -19,24 +19,24 @@ class ClassifyTicketOutput(BaseModel):
 
 
 def classify_ticket(payload: ClassifyTicketInput) -> ClassifyTicketOutput:
-      category, priority, confidence, matched = classify_text(payload.text)
-      return ClassifyTicketOutput(
-          category=category,
-          priority=priority,
-          confidence=confidence,
-          matched_keywords=matched,
-      )
-      
+    category, priority, confidence, matched = classify_text(payload.text)
+    return ClassifyTicketOutput(
+        category=category,
+        priority=priority,
+        confidence=confidence,
+        matched_keywords=matched,
+    )
+    
 TOOL_METADATA = {
-      "name": "classify_ticket",
-      "description": (
-          "Classe un ticket support Marina Rentals en (catégorie, priorité, confidence). "
-          "À utiliser au premier contact pour router le ticket vers le bon flow et déterminer "
-          "l'urgence avant de répondre. "
-          "Catégories : cancellation, payment, booking, safety, weather, equipment, damage, other. "
-          "Priorités : urgent, high, normal, low."
-      ),
-      "risk_level": "read",
-      "input_schema": ClassifyTicketInput.model_json_schema(),
-      "output_schema": ClassifyTicketOutput.model_json_schema(),
-  }
+    "name": "classify_ticket",
+    "description": (
+        "Classe un ticket support Marina Rentals en (catégorie, priorité, confidence). "
+        "À utiliser au premier contact pour router le ticket vers le bon flow et déterminer "
+        "l'urgence avant de répondre. "
+        "Catégories : cancellation, payment, booking, safety, weather, equipment, damage, other. "
+        "Priorités : urgent, high, normal, low."
+    ),
+    "risk_level": "read",
+    "input_schema": ClassifyTicketInput.model_json_schema(),
+    "output_schema": ClassifyTicketOutput.model_json_schema(),
+}

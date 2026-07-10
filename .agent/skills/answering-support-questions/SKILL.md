@@ -110,8 +110,7 @@ Le routeur doit être corrigé, pas la skill élargie.
 
 À créer à la demande dans `assets/` :
 
-- `answer_template.md` — squelette Markdown pour la réponse si les callers
-  attendent un format riche (Markdown, HTML) plutôt que du JSON brut.
+- `answer_template.md` — squelette Markdown pour la réponse si les callers attendent un format riche (Markdown, HTML) plutôt que du JSON brut.
 
 ## Contrat de sortie (invariants)
 
