@@ -203,3 +203,117 @@ def test_policy_decision_is_frozen() -> None:
     with pytest.raises(Exception):
         # frozen=True fait lever FrozenInstanceError sur toute mutation
         dec.verdict = "block"  # type: ignore[misc]
+
+
+# ─── Tests unité — vibe_diff module (Phase 6.3) ───────────────────────
+
+
+from sandbox.policy_server.vibe_diff import (  # noqa: E402
+    FALLBACK_TEMPLATE,
+    MAX_LENGTH,
+    MAX_LINES,
+    TEMPLATES,
+    _validate,
+    generate as generate_vibe_diff,
+)
+
+
+@pytest.mark.parametrize("reason", list(TEMPLATES.keys()))
+def test_vibe_diff_template_satisfies_contract(reason: str) -> None:
+    """Chaque template rendu satisfait le contrat de vibe_diff_checklist.md."""
+    output = generate_vibe_diff(
+        reason=reason,
+        tool="draft_reply",
+        payload={"customer_name": "Jean", "priority": "high"},
+        user_message="Question test — le client demande un remboursement",
+        layer="semantic",
+    )
+    is_valid, why = _validate(output)
+    assert is_valid, f"[{reason}] vibe_diff invalide : {why}\nOutput:\n{output}"
+
+
+def test_vibe_diff_fallback_for_unknown_reason() -> None:
+    """Un reason non listé produit un vibe_diff valide via FALLBACK_TEMPLATE."""
+    output = generate_vibe_diff(
+        reason="future_unknown_category",
+        tool="send_email",
+        payload={"to": "user"},
+        user_message="cas non prévu",
+        layer="semantic",
+    )
+    is_valid, why = _validate(output)
+    assert is_valid, f"fallback vibe_diff invalide : {why}\nOutput:\n{output}"
+    assert "future_unknown_category" in output
+
+
+def test_vibe_diff_masks_pii_arriving_via_payload_summary() -> None:
+    """PII arrivant via {payload_summary} est masqué dans le rendu final."""
+    output = generate_vibe_diff(
+        reason="act_tool_default_hitl",
+        tool="create_ticket",
+        payload={"customer_email": "leak@example.com", "priority": "urgent"},
+        user_message="créer un ticket",
+        layer="structural",
+    )
+    assert "leak@example.com" not in output
+    assert "[PII masqué]" in output
+
+
+def test_vibe_diff_length_bounded_by_contract() -> None:
+    """Un user_message monstrueux ne fait jamais dépasser MAX_LENGTH."""
+    huge_message = "attaque " * 500  # ~4000 chars
+    output = generate_vibe_diff(
+        reason="exclusion_with_business_context",
+        tool="generate_report",
+        payload={"filter": "exclude_urgent"},
+        user_message=huge_message,
+        layer="semantic",
+    )
+    assert len(output) <= MAX_LENGTH
+    assert len(output.split("\n")) <= MAX_LINES
+
+
+def test_vibe_diff_drift_markdown_has_all_python_templates() -> None:
+    """Chaque TEMPLATES key doit apparaître comme section dans le markdown."""
+    checklist_path = Path(__file__).parent.parent / "meta" / "vibe_diff_checklist.md"
+    markdown = checklist_path.read_text(encoding="utf-8")
+    for reason in TEMPLATES:
+        marker = f"### Template `{reason}`"
+        assert marker in markdown, (
+            f"Template Python '{reason}' n'a pas de section dans "
+            f"meta/vibe_diff_checklist.md — dérive détectée. "
+            f"Ajoute la section, ou retire le template Python."
+        )
+
+
+def test_vibe_diff_validate_detects_json_dump() -> None:
+    """_validate rejette un vibe_diff qui contient un JSON dump du payload."""
+    bad = '"customer":"Jean", "priority":"high"\n[Approuver] [Rejeter]'
+    is_valid, why = _validate(bad)
+    assert not is_valid
+    assert "json_dump" in why
+
+
+def test_vibe_diff_validate_detects_missing_options() -> None:
+    """_validate rejette un vibe_diff avec moins de 2 options actionables."""
+    bad = "Action à faire.\nDétails.\n[Approuver]"
+    is_valid, why = _validate(bad)
+    assert not is_valid
+    assert "missing_options" in why
+
+
+def test_vibe_diff_validate_detects_non_actionable_option() -> None:
+    """_validate rejette les options interdites (Voir plus, Consulter, ...)."""
+    bad = "Action.\nDétails.\n[Voir plus] [Rejeter]"
+    is_valid, why = _validate(bad)
+    assert not is_valid
+    assert "non_actionable" in why
+
+
+def test_vibe_diff_fallback_template_is_valid() -> None:
+    """FALLBACK_TEMPLATE une fois rempli passe le contrat."""
+    rendered = FALLBACK_TEMPLATE.format(
+        reason="whatever", tool="some_tool"
+    )
+    is_valid, why = _validate(rendered)
+    assert is_valid, f"FALLBACK_TEMPLATE invalide : {why}\nRendered:\n{rendered}"

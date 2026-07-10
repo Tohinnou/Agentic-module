@@ -13,15 +13,11 @@ Public API : `check()` — LE seul point d'entrée que l'orchestrator utilise.
 Les trois modules internes (structural_gate, semantic_gate, vibe_diff) sont
 des détails d'implémentation ; leurs signatures peuvent évoluer, `check()`
 est le contrat gelé.
-
-Ce fichier est écrit AVANT l'implémentation des gates (discipline EDD).
-Tous les appels à check() lèvent NotImplementedError tant que Phase 6.1-6.3
-ne sont pas complétées.
 """
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 
 Verdict = Literal["allow", "block", "hitl_required"]
@@ -94,7 +90,6 @@ def check(
 
     Raises:
         ValueError: si `agent`, `env`, ou `tool` non reconnus.
-        NotImplementedError: tant que Phase 6.1-6.3 non complétées.
 
     Example:
         >>> decision = check(
@@ -117,12 +112,20 @@ def check(
         return structural
 
     if structural.verdict == "hitl_required":
-        # HITL structural (act default) : on enrichit le vibe_diff avec
-        # un stub temporaire. Phase 6.3 remplacera par vibe_diff.generate().
+        # HITL structural (act default) : vibe_diff délégué à vibe_diff.generate()
+        # (Phase 6.3 — remplace le stub inline précédent).
+        from .vibe_diff import generate as generate_vibe_diff
+
         return PolicyDecision(
             verdict="hitl_required",
             reason=structural.reason,
-            vibe_diff=_stub_vibe_diff_for_act_tool(tool, payload),
+            vibe_diff=generate_vibe_diff(
+                reason=structural.reason,
+                tool=tool,
+                payload=payload,
+                user_message=user_message,
+                layer="structural",
+            ),
             layer_triggered="structural",
         )
 
@@ -136,94 +139,25 @@ def check(
         return semantic
 
     if semantic.verdict == "hitl_required":
-        # HITL sémantique : générer vibe_diff selon la catégorie détectée.
+        # HITL sémantique : générer vibe_diff selon la catégorie détectée
+        # (Phase 6.3 — délégué au module vibe_diff avec masquage PII + validation).
+        from .vibe_diff import generate as generate_vibe_diff
+
         return PolicyDecision(
             verdict="hitl_required",
             reason=semantic.reason,
-            vibe_diff=_stub_vibe_diff_for_semantic(semantic.reason, tool, payload, user_message),
+            vibe_diff=generate_vibe_diff(
+                reason=semantic.reason,
+                tool=tool,
+                payload=payload,
+                user_message=user_message,
+                layer="semantic",
+            ),
             layer_triggered="semantic",
         )
 
     # Semantic ALLOW → verdict final
     return semantic
-
-
-def _stub_vibe_diff_for_act_tool(tool: str, payload: dict) -> str:
-    """
-    Placeholder Vibe Diff pour tools `act` en HITL structural (Phase 6.1).
-
-    Phase 6.3 remplacera cette fonction par `vibe_diff.generate()` qui
-    utilisera les 4 templates fixes de `meta/vibe_diff_checklist.md`.
-
-    Contrainte : output ≤ 350 caractères, ≤ 5 lignes.
-    """
-    detail = _short_payload_summary(payload)
-    lines = [
-        f"Action : invoquer {tool}.",
-        f"Détails : {detail}.",
-        "⚠ Cette action est irréversible.",
-        "[Approuver] [Rejeter]",
-    ]
-    return "\n".join(lines)
-
-
-def _short_payload_summary(payload: dict, max_chars: int = 100) -> str:
-    """Résumé du payload sur une ligne (≤ max_chars caractères)."""
-    if not payload:
-        return "aucun paramètre"
-    pairs = list(payload.items())[:3]
-    parts = [f"{k}={_truncate(v)}" for k, v in pairs]
-    summary = ", ".join(parts)
-    return summary if len(summary) <= max_chars else summary[: max_chars - 3] + "..."
-
-
-def _truncate(value: Any, max_chars: int = 30) -> str:  # noqa: ANN401 — accepte tout type
-    s = str(value)
-    return s if len(s) <= max_chars else s[: max_chars - 3] + "..."
-
-
-def _stub_vibe_diff_for_semantic(
-    reason: str, tool: str, payload: dict, user_message: str
-) -> str:
-    """
-    Placeholder Vibe Diff pour Semantic HITL (Phase 6.2 stub, Phase 6.3 refactor).
-
-    Utilise 3 templates simplifiés issus de `meta/vibe_diff_checklist.md`.
-    Phase 6.3 extraira dans un vrai module `vibe_diff.py` avec les
-    4 templates complets + validation regex des anti-patterns.
-
-    Contrainte : ≤ 350 caractères, ≤ 5 lignes.
-    """
-    if reason == "pii_leak_risk":
-        lines = [
-            "Payload contient des PII en clair (email/téléphone/ID).",
-            "Convention : ces valeurs devraient être des placeholders [[VAR]].",
-            "Approuver si test/dev local, sinon corriger.",
-            "[Approuver] [Rejeter]",
-        ]
-    elif reason == "policy_conflict":
-        lines = [
-            f"Draft {tool} en désaccord avec les sources citées.",
-            "Un humain doit trancher (force majeure ? cas spécial ?).",
-            "[Approuver] [Rejeter et refaire]",
-        ]
-    elif reason == "exclusion_with_business_context":
-        lines = [
-            "Filtre d'exclusion demandé avec raison opérationnelle.",
-            f"Message : \"{_truncate(user_message, 80)}\".",
-            "Humain valide la légitimité de l'exclusion.",
-            "[Approuver] [Rapport complet]",
-        ]
-    else:
-        # Fallback pour catégories non anticipées (défense)
-        lines = [
-            f"HITL requis : {reason}.",
-            f"Tool : {tool}.",
-            "[Approuver] [Rejeter]",
-        ]
-
-    result = "\n".join(lines)
-    return result if len(result) <= 350 else result[:347] + "..."
 
 
 __all__ = ["check", "PolicyDecision", "Verdict", "Layer"]
