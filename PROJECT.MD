@@ -828,30 +828,45 @@ kaggle/
     trigger cases
     skill evals
 
-  ### Phase 6 — Sécurité
+  ### Phase 6 — Sécurité ✅ (clôturée le 2026-07-11, commits 79f592e..HEAD)
 
     Objectif : appliquer Day 4.
 
-    Créer :
+    **Livré** (voir `src/sandbox/policy_server/README.md` pour l'onboarding module) :
 
-    meta/agent_security_policy.md
-    meta/vibe_diff_checklist.md
-    meta/dependency_policy.md
+    Data (contrats humains éditables) :
+    - meta/agent_security_policy.md    ← allowlist par (agent, env, tool) + act_rules
+    - meta/vibe_diff_checklist.md      ← 4 templates + anti-patterns + contrat testable
 
-    Implémenter dans security_service.py :
+    Code (Python) :
+    - src/sandbox/policy_server/__init__.py         ← check() + PolicyDecision frozen
+    - src/sandbox/policy_server/structural_gate.py  ← allowlist déterministe (fail-closed)
+    - src/sandbox/policy_server/semantic_gate.py    ← LLM-judge (OpenRouter Haiku-4.5, cache)
+    - src/sandbox/policy_server/vibe_diff.py        ← 4 templates + PII masking + validation
+    - src/sandbox/policy_server/exceptions.py       ← PolicyRefusal hierarchy
 
-    - refuser lecture de .env
-    - refuser écriture hors projet
-    - bloquer dépendances inconnues
-    - demander validation pour action sensible
-    - produire Vibe Diff
+    Câblage :
+    - orchestrator._call_tool()  ← choke point unique, invoque check() avant fn(payload)
+    - api.py                     ← PolicyBlockError → 403, PolicyHITLRequired → 428
 
-    Notions pratiquées :
+    Tests :
+    - tests/test_policy_server.py               ← 31 tests unit (4 gates, 10 adv, invariants)
+    - tests/test_policy_server_integration.py   ← 5 tests intégration (câblage 6.4)
+    - evals/adversarial_policy.yaml             ← fixture 10 cases (adv_01..adv_10)
 
-    Zero Ambient Authority
-    Vibe Diff
-    guardrails
-    policy enforcement
+    **Non livré (out-of-scope Phase 6, différé)** :
+    - meta/dependency_policy.md (AgBOM — sera couvert Phase 8)
+    - linter statique anti-PII dans les sources Python (§4.6 partiel)
+
+    Notions pratiquées et vérifiées :
+
+    Zero Ambient Authority          ✅ fail-closed allowlist
+    Vibe Diff                       ✅ generator + 4 templates + PII masking
+    LLM firewall / judge            ✅ semantic gate avec prompt v1
+    Confused Deputy prevention      ✅ PolicyDecision frozen, payload_factory anti-mutation
+    Confirmation Fatigue mitigation ✅ HITL > BLOCK sur ambigu, format anti-JSON
+    guardrails                      ✅ 3 axes fail-closed (API, parsing, verdict enum)
+    policy enforcement              ✅ orchestrator._call_tool wired
 
   ### Phase 7 — Observabilité
 

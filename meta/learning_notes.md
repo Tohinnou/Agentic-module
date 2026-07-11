@@ -40,6 +40,24 @@ Il y a 2 classifieurs dans le sandbox, avec 2 espaces de labels disjoints :
 
 Un ticket sur l'annulation peut être `nominal` (question normale) OU `rule_override_detected` (si phrasé *"ignore les règles d'annulation"*). Le **sujet** du ticket est indépendant du **risque** du call.
 
+### 3. Étendre le système = data-first, code-second (identifié 2026-07-11 après quiz Phase 6.5)
+
+Pour ajouter un agent, un tool, une catégorie Semantic, une règle policy :
+
+**Ordre des gestes** :
+
+1. **DATA** — modifier un fichier `meta/*.md` (allowlist, act_rules, checklist, template)
+2. **CODE** — ajouter/modifier une classe Python (agent, tool wrapper, template)
+3. **TESTS** — asserter à la fois ce qui doit PASSER et ce qui doit être REFUSÉ
+
+**Piège classique** (attrapé par le quiz Phase 6.5) : partir de "j'écris une classe" au lieu de "je touche le YAML".
+
+**Conséquence de l'inversion — Confused Deputy silencieux** :
+
+Un dev copie-colle `SupportAgent` pour créer `ReportAgent` **sans changer** `AGENT_NAME = "support_agent"`. La classe s'exécute avec les permissions de `support_agent` — tests passent, comportement observable normal. En prod, `ReportAgent` hérite silencieusement des futurs privilèges de `SupportAgent`. **Privilege escalation par mauvaise identité**.
+
+**Défense** : tests de refus positif (asserter que `ReportAgent` échoue à appeler `draft_reply` alors que `SupportAgent` réussit) — ils attrapent les inversions d'identité que les tests "happy path" ne voient jamais.
+
 ---
 
 ## Phase 1 — Mise en place du projet
@@ -1134,4 +1152,27 @@ def reset_index(monkeypatch):
 **5 tests d'intégration séparés en fichier dédié, PAS mélangés avec test_orchestrator.py** : `test_policy_server_integration.py` couvre le CÂBLAGE 6.4 (checks appelés, verdicts recordés, exceptions raised, HITL permissif). `test_orchestrator.py` couvre la MÉCANIQUE Phase 3 (ordre des events, HITL des placeholders, sink JSONL). Alternative rejetée : ajouter les 5 tests dans `test_orchestrator.py`. Pourquoi la séparation : (1) **charge cognitive du fichier** — un test file de 15+ tests devient dur à naviguer ; (2) **des runners de tests peuvent skipper le fichier d'intégration** quand OPENROUTER_API_KEY est absent, sans skipper les tests locaux ; (3) **le nom du fichier documente le scope** — un test qui échoue à `test_policy_server_integration.py::test_X` signale immédiatement "problème de câblage 6.4", pas "problème d'orchestrateur générique" ; (4) 3 des 5 tests utilisent `monkeypatch` pour forcer verdicts sans appel réseau — le fichier peut décrire ce pattern en tête de module, ce qui n'aurait pas sa place dans le fichier "mécanique générique". Pattern général : *les tests unitaires par MÉCANIQUE (comportement d'un composant en isolation) et les tests d'INTÉGRATION (câblage entre composants) méritent des fichiers séparés — ils ont des runners différents, des dépendances différentes, des philosophies de mocking différentes. Les mélanger force le lecteur à distinguer mentalement à chaque test*.
 
 ---
+
+## Phase 6.5 — Clôture Phase 6
+
+### Audit des critères §4 CLAUDE.md couverts par Phase 6
+
+Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses avant d'attaquer Phase 7.
+
+| §4 | Règle | État | Preuve |
+|---|---|---|---|
+| 3 | Vibe Diff obligatoire avant tool à side-effect | ✅ | `structural_gate.py` détecte `act_rules[tool].force_hitl` → HITL_REQUIRED → `check()` invoque `vibe_diff.generate()` avec vibe_diff obligatoire (invariant `PolicyDecision`). Seul `create_ticket` marqué `act` actuellement (pas encore exercé end-to-end dans `SupportAgent.run()` qui ne l'invoque pas). |
+| 4 | Tous les tool calls passent par le Policy Server | ✅ | `orchestrator._call_tool()` — choke point unique, `policy_check()` invoqué entre `payload_factory()` et `fn(payload)`. Bypass explicite via `enforce_policy=False` uniquement (grep-able). |
+| 5 | Zero Ambient Authority | ✅ | `structural_gate.py` fail-closed : `default_policy: deny`, allowlist explicite par triplet (agent, env, tool). Nouveau tool/agent = ajout explicite dans `meta/agent_security_policy.md`, sinon BLOCK immédiat. |
+| 6 | Context Hygiene (pas de PII hardcodée) | ⚠️ partiel | `vibe_diff.py` masque tout PII qui fuiterait dans le rendu final (belt). Pas de linter statique qui rejette du PII en dur dans les sources Python (à faire en Phase 8+ ou hors-scope sandbox). |
+| 7 | Vibe Trajectory 100 % des tours | ✅ | `TrajectoryEvent` étendu Phase 6.4 (`policy_verdict/reason/layer` optionnels). Toutes les branches (allow/block/hitl/error) passent par `_record()`. Payload invalide capturé grâce à `payload_factory` (fix `b50faa9`). |
+
+**Verdict global** : Phase 6 tient ses promesses côté architecture. Le seul point ⚠️ est §4.6 côté linter statique — pas critique en sandbox mono-user.
+
+### `src/sandbox/policy_server/README.md`
+
+**Le README module n'est PAS le CLAUDE.md miniature — c'est un guide d'usage pour un consommateur externe** : CLAUDE.md décrit la philosophie du projet ; le README du module décrit l'API, le flux, comment étendre. Public cible : un dev qui débarque sur `policy_server/` demain et doit y ajouter un agent ou une catégorie sans avoir à lire toute la Phase 6. Pattern général : *un README module est un contrat d'usage — 3 sections obligatoires (flux + API publique + comment étendre) et 1 section utile (pièges). Au-delà, on tombe dans la duplication de code documentation ; en dessous, le consommateur va lire le code source*.
+
+---
+
 
