@@ -149,58 +149,65 @@ Comme ça, tu peux tester l’architecture avant de brancher un vrai modèle.
 
 ## 4. Architecture cible du projet
 
-Structure proposée :
+> Mis à jour le 2026-07-10 (fin Phase 5) pour refléter la structure réelle du code.
+> `CLAUDE.md` §3 fait foi pour la hiérarchie de fichiers ; ce qui suit est le miroir technique côté `src/sandbox/`.
 
-agentic-support-sandbox/
+Structure réelle (package `src/sandbox/`, **pas** `app/` — il n'y a pas de couche `services/` séparée) :
+
+kaggle/
 │
 ├── README.md
 ├── pyproject.toml
 ├── .env.example
 │
-├── app/
-│   ├── main.py
-│   ├── config.py
-│   ├── database.py
+├── src/sandbox/
+│   ├── __init__.py
+│   ├── api.py                    ← FastAPI + lifespan(init_db). Un seul endpoint pour l'instant : /health
+│   ├── db.py                     ← engine SQLAlchemy + session factory
+│   ├── models.py                 ← modèles SQLAlchemy 2.0 à plat (pas de sous-package models/)
 │   │
-│   ├── models/
-│   │   ├── ticket.py
-│   │   ├── document.py
-│   │   └── evaluation.py
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   └── orchestrator.py       ← SupportAgent : pipeline fixe classify→retrieve→draft→(evaluate)
+│   │                                Evaluator et Security Reviewer n'ont PAS de fichier dédié :
+│   │                                Evaluator = tool evaluate_answer (+ auto-eval de SupportAgent) ;
+│   │                                Security Reviewer = 0 ligne de code (Phase 6, policy_server/)
 │   │
-│   ├── routers/
-│   │   ├── query.py
-│   │   ├── tickets.py
-│   │   ├── reports.py
-│   │   └── evals.py
-│   │
-│   ├── services/
-│   │   ├── retrieval_service.py
-│   │   ├── generation_service.py
-│   │   ├── ticket_service.py
-│   │   ├── evaluation_service.py
-│   │   └── security_service.py
-│   │
-│   ├── tools/
-│   │   ├── retrieve_docs.py
-│   │   ├── create_ticket.py
+│   ├── tools/                    ← 1 fichier par tool : Input/Output Pydantic + TOOL_METADATA
+│   │   ├── __init__.py
 │   │   ├── classify_ticket.py
+│   │   ├── retrieve_docs.py
 │   │   ├── draft_reply.py
+│   │   ├── create_ticket.py
 │   │   ├── evaluate_answer.py
 │   │   └── generate_report.py
 │   │
-│   ├── agents/
-│   │   ├── orchestrator.py
-│   │   ├── support_agent.py
-│   │   ├── evaluator_agent.py
-│   │   └── security_reviewer_agent.py
+│   ├── retrieval/                ← logique pure (BM25/TF-IDF), séparée du wrapper tool
+│   │   ├── __init__.py
+│   │   ├── corpus.py
+│   │   └── bm25.py
+│   ├── classification/
+│   │   ├── __init__.py
+│   │   └── rules.py
+│   ├── drafting/
+│   │   ├── __init__.py
+│   │   └── templates.py
+│   ├── evaluation/
+│   │   ├── __init__.py
+│   │   └── judge.py              ← LLM-as-judge, cache dans data/judge_cache.json
+│   ├── reporting/
+│   │   ├── __init__.py
+│   │   └── builder.py
+│   ├── agbom/
+│   │   ├── __init__.py
+│   │   └── build_registry.py     ← génère meta/tool_registry.json depuis les TOOL_METADATA
 │   │
-│   └── observability/
-│       ├── trajectory_logger.py
-│       └── cost_tracker.py
+│   └── policy_server/
+│       └── __init__.py           ← STUB (Phase 6 — Structural + Semantic Gating pas encore codés)
 │
-├── data/
-│   └── seed/
-│       └── sample_tickets.json
+├── data/                         ← runtime, gitignored. Pas de seed/, créé par init_db() au 1er lancement
+│   ├── sandbox.db
+│   └── judge_cache.json
 │
 ├── docs/                        ← corpus RAG (10 policies Marina Rentals, déjà créées)
 │   ├── cancellation_policy.md
@@ -214,17 +221,18 @@ agentic-support-sandbox/
 │   ├── escalation_policy.md
 │   └── privacy_policy.md
 │
-├── meta/                        ← documentation interne du projet (architecture, policies)
-│   ├── agentic_architecture.md
-│   ├── tool_registry.json
-│   ├── agent_security_policy.md
-│   ├── vibe_diff_checklist.md
-│   ├── agent_eval_rubric.md
-│   ├── dependency_policy.md
+├── specs/                        ← Spec-Driven Dev (1 feature = 1 .md/.yaml). Vide pour l'instant (README seul)
+│
+├── meta/                         ← AgBOM + documentation interne (architecture, policies)
+│   ├── tool_registry.json        ← auto-généré (agbom/build_registry.py)
+│   ├── learning_notes.md         ← journal WHY (voir CLAUDE.md, discipline de persistance)
 │   └── agents/
+│       ├── README.md
 │       ├── support_agent.card.json
 │       ├── evaluator_agent.card.json
 │       └── security_reviewer_agent.card.json
+│   (agentic_architecture.md, agent_security_policy.md, vibe_diff_checklist.md,
+│    agent_eval_rubric.md, dependency_policy.md → Phase 6+, pas encore créés)
 │
 ├── .agent/skills/
 │   ├── answering-support-questions/
@@ -242,30 +250,48 @@ agentic-support-sandbox/
 │   ├── evaluating-agent-answers/
 │   │   ├── SKILL.md
 │   │   ├── eval_cases.json
-│   │   ├── scripts/
+│   │   ├── references/eval_rubric.md
 │   │   └── assets/
 │   │
 │   └── generating-weekly-report/
 │       ├── SKILL.md
 │       ├── eval_cases.json
 │       ├── scripts/
+│       │   ├── parse_period.py
+│       │   └── aggregate_tickets.py
+│       ├── references/
 │       └── assets/
 │
 ├── evals/
-│   ├── golden_questions.json
-│   ├── expected_answers.json
-│   ├── skill_trigger_cases.json
-│   └── safety_cases.json
+│   ├── README.md
+│   ├── judge_golden.yaml         ← 6 cas (pass/fail/borderline) pour evaluate_answer
+│   └── report_golden.yaml
+│   (golden.yaml, adversarial.yaml, judge_prompts.md → Phase 8, pas encore créés — voir CLAUDE.md §6.
+│    Ce ne sont PAS golden_questions.json / expected_answers.json / skill_trigger_cases.json / safety_cases.json)
 │
-├── logs/
-│   └── agent_trajectory.jsonl
+├── trajectories/
+│   └── *.jsonl                  ← gitignored, vide aujourd'hui : aucune route live n'appelle
+│                                    SupportAgent avec un trajectory_sink (api.py n'expose que /health)
 │
-└── tests/
-    ├── test_retrieval.py
-    ├── test_tools.py
-    ├── test_security.py
-    ├── test_eval_service.py
-    └── test_agent_orchestrator.py
+└── tests/                       ← 9 fichiers : 1 par tool/composant + test_health, test_tool_registry, test_orchestrator
+
+**Ce qui a changé par rapport à l'ancienne version de ce diagramme :**
+- Le package s'appelle `src/sandbox/`, pas `app/` ; pas de couche `services/`. La logique pure vit dans des
+  packages par domaine (`retrieval/`, `classification/`, `drafting/`, `evaluation/`, `reporting/`), et chaque
+  `tools/*.py` est un wrapper fin (Pydantic I/O + `TOOL_METADATA`) autour de cette logique.
+  **`security_service.py` n'existe pas et ne doit pas être recréé sous ce nom** — la Phase 6 cible `policy_server/`.
+- Pas de `routers/` séparé ni de sous-package `models/` — un seul `models.py` à plat (pas de sur-ingénierie
+  prématurée avant qu'elle soit justifiée, cf. CLAUDE.md §8).
+- `agents/` ne contient qu'un seul fichier runtime (`orchestrator.py`, classe `SupportAgent`). Evaluator et
+  Security Reviewer ne sont pas des agents avec du code séparé — seulement des Agent Cards
+  (`meta/agents/*.card.json`, Phase 4, conceptuel A2A).
+- `observability/` (trajectory_logger.py, cost_tracker.py) n'existe pas comme module dédié : le logging de
+  trajectoire vit directement dans `orchestrator.py` (`TrajectoryEvent`, `_dump_jsonl`) ; il n'y a aucun
+  cost tracker pour l'instant (à combler en Phase 7, cf. angle mort noté en §1).
+- `logs/agent_trajectory.jsonl` renommé en `trajectories/*.jsonl` — c'est le nom que verrouille CLAUDE.md, pas `logs/`.
+- `data/seed/sample_tickets.json` n'existe pas et n'est pas prévu — `data/` ne contient que du runtime gitignored.
+- Ajout de `specs/` (SDD, CLAUDE.md §3), absent de l'ancien diagramme.
+- Noms corrigés dans `evals/` et `meta/` pour matcher ce qui existe réellement aujourd'hui vs. ce qui reste à créer.
 
 
 ## 5. Les notions que tu vas pratiquer dans chaque partie
