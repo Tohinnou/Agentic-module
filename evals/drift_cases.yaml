@@ -1,0 +1,167 @@
+# Intent Drift fixture — 6 cas synthétiques pour test EDD (Phase 7.0)
+#
+# Chaque case décrit :
+#   - id : slug unique
+#   - description : ce que le cas illustre
+#   - events : liste de TrajectoryEvent (mini-format sans les champs non
+#     pertinents pour le detector — session_id/timestamp/durations sont
+#     remplis par la fixture loader avec des valeurs par défaut)
+#   - expected :
+#     - signals : liste des codes signal attendus (ordre = alphabétique)
+#     - severity : sévérité globale attendue (none/low/medium/high)
+#
+# Source de vérité des signaux : meta/intent_drift_signals.md
+# Consommé par : tests/test_observability.py
+
+version: v1
+agent: support_agent
+
+targets:
+  detection_precision_min: 1.0   # aucun faux positif sur cas nominal
+  detection_recall_min: 1.0      # tous les signaux définis doivent être détectés
+
+cases:
+  # ─── Cas 1 : baseline nominal (aucun drift) ─────────────────────────
+  - id: nominal_baseline
+    description: >
+      Session complète classify→retrieve→draft avec tous les policy verdicts
+      à allow. Aucun signal attendu. Baseline anti-faux-positif.
+    events:
+      - step: 1
+        action: classify_ticket
+        status: success
+        policy_verdict: allow
+      - step: 2
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 3
+        action: draft_reply
+        status: success
+        policy_verdict: allow
+    expected:
+      signals: []
+      severity: none
+
+  # ─── Cas 2 : BLOCK au premier tool ──────────────────────────────────
+  - id: block_at_classify
+    description: >
+      Un seul event avec policy_verdict=block (adv_01 pattern). Pipeline
+      arrêté immédiatement. Signaux attendus : policy_block_encountered
+      (high) + unexpected_tool_sequence (pipeline incomplet).
+    events:
+      - step: 1
+        action: classify_ticket
+        status: error
+        policy_verdict: block
+        policy_reason: rule_override_detected
+    expected:
+      signals:
+        - policy_block_encountered
+        - unexpected_tool_sequence
+      severity: high
+
+  # ─── Cas 3 : HITL bypassé (mode sandbox strict_hitl=False) ──────────
+  - id: hitl_bypassed_semantic
+    description: >
+      Pipeline complet mais l'un des tools a policy_verdict=hitl_required
+      + status=success (mode permissif). Signal medium. Le pipeline est
+      complet donc pas de drift de séquence.
+    events:
+      - step: 1
+        action: classify_ticket
+        status: success
+        policy_verdict: allow
+      - step: 2
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 3
+        action: draft_reply
+        status: success
+        policy_verdict: hitl_required
+        policy_reason: policy_conflict
+    expected:
+      signals:
+        - hitl_bypassed
+      severity: medium
+
+  # ─── Cas 4 : ordre des tools inversé ────────────────────────────────
+  - id: unexpected_order_retrieve_before_classify
+    description: >
+      retrieve_docs appelé AVANT classify_ticket — anomalie
+      d'orchestration hypothétique (bug). Séquence non conforme à
+      support_agent expected order. Signal high.
+    events:
+      - step: 1
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 2
+        action: classify_ticket
+        status: success
+        policy_verdict: allow
+      - step: 3
+        action: draft_reply
+        status: success
+        policy_verdict: allow
+    expected:
+      signals:
+        - unexpected_tool_sequence
+      severity: high
+
+  # ─── Cas 5 : retrieve_docs appelé deux fois ─────────────────────────
+  - id: duplicate_retrieve
+    description: >
+      retrieve_docs appelé 2 fois dans la même session. Session complète
+      côté pipeline, mais duplication d'action. Signal medium.
+    events:
+      - step: 1
+        action: classify_ticket
+        status: success
+        policy_verdict: allow
+      - step: 2
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 3
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 4
+        action: draft_reply
+        status: success
+        policy_verdict: allow
+    expected:
+      signals:
+        - duplicate_action
+        - unexpected_tool_sequence
+      severity: high
+
+  # ─── Cas 6 : multi-drift (plusieurs signaux) ────────────────────────
+  - id: multi_drift_retrieve_only_hitl_and_dupe
+    description: >
+      Session dégénérée : retrieve_docs 3 fois, jamais de classify ni
+      draft, avec un HITL bypassé au passage. Signaux attendus :
+      duplicate_action, hitl_bypassed, unexpected_tool_sequence.
+      Sévérité globale = high (à cause du unexpected_tool_sequence).
+    events:
+      - step: 1
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+      - step: 2
+        action: retrieve_docs
+        status: success
+        policy_verdict: hitl_required
+        policy_reason: pii_leak_risk
+      - step: 3
+        action: retrieve_docs
+        status: success
+        policy_verdict: allow
+    expected:
+      signals:
+        - duplicate_action
+        - hitl_bypassed
+        - unexpected_tool_sequence
+      severity: high

@@ -1175,4 +1175,42 @@ Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses 
 
 ---
 
+## Phase 7.0 — Observability specs + EDD fixture + contracts
+
+### Concept transversal — Application concrète du "data-first / code-second"
+
+**Le PREMIER fichier créé en Phase 7.0 est `meta/intent_drift_signals.md`, PAS un module Python** : la spec des 4 signaux vit dans un fichier data-editable, la fixture (`evals/drift_cases.yaml`) suit, PUIS les stubs Python. Application directe du 3ᵉ concept à ré-ancrer identifié en Phase 6.5 (data-first / code-second). Alternative rejetée : coder les 4 signaux directement en constantes Python dans `drift.py`. Pourquoi la discipline : (1) un futur reviewer/audit peut lire `intent_drift_signals.md` sans toucher au code — même hygiène qu'`agent_security_policy.md` en Phase 6.1 ; (2) les tests de dérive (contract entre YAML fixture et markdown doc) sont naturels dès Phase 7.0 ; (3) réviser un signal (ajout, sévérité) devient un diff Markdown, pas un refactor Python. Pattern général : *chaque phase qui ajoute un composant de "gouvernance/audit" démarre par le contrat data. Si on démarre par le code, on doit refactorer la data plus tard — coût qui grimpe avec l'usage. Le 3ᵉ concept à ré-ancrer devient une pratique en Phase 7*.
+
+---
+
+### `meta/intent_drift_signals.md`
+
+**4 signaux exhaustifs et disjoints — le scope est FIGÉ en 7.0, pas "on verra en 7.2"** : `policy_block_encountered`, `hitl_bypassed`, `unexpected_tool_sequence`, `duplicate_action`. Le contrat data DÉCIDE le scope de 7.2 en amont. Alternative rejetée : "on commence par 2-3 signaux et on ajoute au fur et à mesure". Pourquoi le scope figé dès 7.0 : (1) la fixture peut être écrite en 7.0 avec des cas EXHAUSTIFS pour ces 4 signaux — pas de fixture "à compléter" ; (2) les tests EDD sont complets dès 7.0 — ils failent proprement puis passent progressivement ; (3) un signal qu'on ajoute en 7.2 casse la discipline EDD (spec pas écrite avant, fixture pas à jour). Pattern général : *un contrat data doit être complet AVANT la première ligne de code du composant qui l'implémente. "On verra à l'usage" est le chemin le plus rapide vers un composant qui grandit par accrétion — impossible à re-scoper ensuite, ses consommateurs ont déjà intégré les surfaces intermédiaires*.
+
+**Rule-based volontairement, PAS LLM-based** : détecteur codé à la main, aucune inférence de modèle. Alternative rejetée : LLM-as-judge sur trajectoires (plus riche, capture des patterns subtils). Trois raisons : (1) **reproductibilité** — même trajectoire → même report, zéro variance ; (2) **coût** — un scan de 1000 trajectoires ne coûte rien vs $$ en LLM ; (3) **testabilité** — chaque signal se teste en unit test isolé, on prouve la présence/absence sur des cas synthétiques (fixture). LLM-based drift = Phase 8+ si besoin d'attraper des patterns non-énumérables. Pattern général : *pour un composant d'observabilité, rule-based bat LLM-based tant que les patterns d'anomalie sont énumérables. Le LLM est nécessaire quand le pattern est "je ne sais pas quoi chercher" — pas quand tu peux lister 4 signatures précises. Choisir LLM par défaut = choisir la variance et le coût sans nécessité*.
+
+---
+
+### `evals/drift_cases.yaml`
+
+**6 cas dont 1 baseline nominal anti-faux-positif** : le case `nominal_baseline` (`signals: [], severity: none`) est aussi important que les 5 cas positifs. Alternative rejetée : ne coder que des cas où un signal DOIT tirer. Pourquoi le baseline : (1) si le detector tire un faux positif sur un cas nominal, ça se voit immédiatement en test paramétrisé ; (2) `test_fixture_has_at_least_one_nominal_baseline` est un test-de-fixture qui garantit qu'on n'oublie pas cette discipline ; (3) le baseline documente ce que "session normale" veut dire — c'est plus concret et versionnable qu'une doc en prose. Pattern général : *chaque test suite de détecteur doit inclure AU MOINS UN cas nominal explicite. Un détecteur qui n'a jamais vu de nominal ne peut pas prouver qu'il ne crie pas au loup — même si tous les cas positifs passent. Le baseline nominal = l'anti-faux-positif structurel*.
+
+---
+
+### `src/sandbox/observability/__init__.py`
+
+**`DriftReport.signals` typé `tuple[DriftSignal, ...]`, PAS `list[DriftSignal]`** : `field(default_factory=tuple)`. Alternative rejetée : `list[DriftSignal]`. Pourquoi `tuple` : (1) le `DriftReport` est `frozen=True` mais un dataclass frozen protège contre l'ASSIGNATION d'attributs, PAS contre la MUTATION d'attributs mutables — `report.signals.append(...)` fonctionnerait avec une list, cassant l'invariant d'immutabilité ; (2) `tuple` rend le report **vraiment** immuable transitivement ; (3) permet de hasher le report → utilisable comme clé de dict, comparable pour dedup. Pattern général : *un frozen dataclass qui contient une collection doit utiliser des types immuables (`tuple`, `frozenset`). Sinon la garantie d'immutabilité est superficielle — c'est un piège classique de Python : `frozen` NE se propage PAS aux attributs. Vérifier chaque champ*.
+
+**`detect_drift()` déclarée dans `__init__.py`, PAS dans `drift.py`** : le point d'entrée public vit dans le package `__init__.py` (comme `check()` dans `policy_server/`). Les helpers privés (`_detect_policy_block`, etc.) vivent dans `drift.py`. Alternative rejetée : `detect_drift` dans `drift.py` avec un `from .drift import detect_drift` dans `__init__.py`. Pourquoi le pattern package-level : (1) **un import propre** — `from sandbox.observability import detect_drift`, sans exposer la structure interne ; (2) **cohérence avec `policy_server/`** — même pattern, un lecteur qui connaît l'un connaît l'autre ; (3) **flexibilité de refactoring** — les helpers de `drift.py` peuvent être renommés/réorganisés sans casser les callers. Pattern général : *pour un package qui expose un "point d'entrée unique" (façade), ce point d'entrée vit dans `__init__.py`. Les modules internes sont libres d'évoluer. Le contrat gelé = la signature publique du `__init__.py`, pas les modules internes*.
+
+**`detect_drift(events: list[dict])`, PAS `list[TrajectoryEvent]`** : le detector accepte des dicts JSON-décodés. Alternative rejetée : `list[TrajectoryEvent]` (Pydantic model). Pourquoi dict : (1) **pas de circular import** — `observability/__init__.py` n'importe pas `agents/orchestrator.py::TrajectoryEvent` (l'inverse est déjà utilisé pour le sink JSONL) ; (2) **résilience au JSONL corrompu** — le reader peut skipper une ligne malformée en dict-only ; les Pydantic validators lèveraient sur chaque cas edge et casseraient l'analyse batch ; (3) **le détecteur ne consomme QUE 5 champs** (`session_id`, `step`, `action`, `status`, `policy_verdict`) — pas besoin de validation du reste. Pattern général : *un composant "read-only" en fin de pipeline doit accepter le format le plus permissif possible (dict brut). Ce qui compte c'est le SOUS-ENSEMBLE de champs qu'il consomme, pas la validité complète du record. Valider ce qu'il utilise, ignorer le reste*.
+
+---
+
+### `src/sandbox/observability/drift.py`
+
+**`EXPECTED_SEQUENCES` avec 2 patterns par agent (avec ET sans `evaluate_answer`), PAS un seul pattern rigide** : `support_agent` a 2 séquences valides : `[classify, retrieve, draft]` OU `[classify, retrieve, draft, evaluate]`. Alternative rejetée : un seul pattern avec `evaluate_answer` optionnel via regex ou wildcard. Pourquoi 2 patterns explicites : (1) **lisible sans regex** — un reviewer voit immédiatement les 2 modes légitimes ; (2) **matching exact** — pas d'ambiguïté sur ce qui compte comme "conforme" ; (3) **extensible sans refactor** — si Phase 8+ ajoute un mode "classify + retrieve seulement", on ajoute un 3ᵉ pattern sans toucher au matching. Pattern général : *pour un matching structurel simple (séquence exacte), énumérer les patterns valides bat un pattern régex avec optionnels. Le code de matching devient `sequence in EXPECTED_SEQUENCES[agent]` — trivial, testable, sans surprise*.
+
+---
+
 
