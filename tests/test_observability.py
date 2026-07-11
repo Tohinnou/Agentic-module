@@ -214,25 +214,155 @@ def test_detect_drift_deterministic() -> None:
         pytest.xfail("detect_drift pas implémenté (attendu Phase 7.2)")
 
 
-# ─── Tests reader (FAIL en 7.0, passent après 7.1) ───────────────────
+# ─── Tests reader (implémentés en Phase 7.1) ──────────────────────────
 
 
-def test_reader_load_trajectory_file_stub_raises() -> None:
-    """Phase 7.0 : reader lève NotImplementedError avec message pointant vers 7.1."""
-    from sandbox.observability.reader import load_trajectory_file
-    with pytest.raises(NotImplementedError, match="Phase 7.1"):
-        load_trajectory_file(Path("nonexistent.jsonl"))
+from sandbox.observability.reader import (  # noqa: E402
+    group_by_session,
+    load_trajectory_dir,
+    load_trajectory_file,
+)
 
 
-def test_reader_load_trajectory_dir_stub_raises() -> None:
-    """Phase 7.0 : reader lève NotImplementedError avec message pointant vers 7.1."""
-    from sandbox.observability.reader import load_trajectory_dir
-    with pytest.raises(NotImplementedError, match="Phase 7.1"):
-        load_trajectory_dir(Path("nonexistent/"))
+def test_load_trajectory_file_reads_valid_jsonl(tmp_path: Path) -> None:
+    """Fichier avec 3 lignes JSON valides → 3 dicts."""
+    p = tmp_path / "traj.jsonl"
+    p.write_text(
+        '{"session_id": "s1", "step": 1, "action": "classify_ticket"}\n'
+        '{"session_id": "s1", "step": 2, "action": "retrieve_docs"}\n'
+        '{"session_id": "s1", "step": 3, "action": "draft_reply"}\n',
+        encoding="utf-8",
+    )
+    events = load_trajectory_file(p)
+    assert len(events) == 3
+    assert [e["action"] for e in events] == [
+        "classify_ticket",
+        "retrieve_docs",
+        "draft_reply",
+    ]
 
 
-def test_reader_group_by_session_stub_raises() -> None:
-    """Phase 7.0 : reader lève NotImplementedError avec message pointant vers 7.1."""
-    from sandbox.observability.reader import group_by_session
-    with pytest.raises(NotImplementedError, match="Phase 7.1"):
-        group_by_session([])
+def test_load_trajectory_file_skips_malformed_json_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ligne malformée = skip + warning stderr, PAS crash."""
+    p = tmp_path / "traj.jsonl"
+    p.write_text(
+        '{"session_id": "s1", "step": 1}\n'
+        "not valid json at all\n"
+        '{"session_id": "s1", "step": 2}\n',
+        encoding="utf-8",
+    )
+    events = load_trajectory_file(p)
+    assert len(events) == 2
+    captured = capsys.readouterr()
+    assert "skip" in captured.err
+    assert ":2" in captured.err  # numéro de ligne signalé
+
+
+def test_load_trajectory_file_skips_non_dict_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Une ligne JSON valide mais non-dict (ex. `42`) est skipée."""
+    p = tmp_path / "traj.jsonl"
+    p.write_text(
+        '{"session_id": "s1"}\n'
+        "42\n"
+        '{"session_id": "s2"}\n',
+        encoding="utf-8",
+    )
+    events = load_trajectory_file(p)
+    assert len(events) == 2
+    captured = capsys.readouterr()
+    assert "non-dict" in captured.err
+
+
+def test_load_trajectory_file_missing_raises(tmp_path: Path) -> None:
+    """Fichier absent = FileNotFoundError explicite."""
+    with pytest.raises(FileNotFoundError):
+        load_trajectory_file(tmp_path / "nope.jsonl")
+
+
+def test_load_trajectory_file_empty_returns_empty(tmp_path: Path) -> None:
+    """Fichier vide = liste vide (silencieux)."""
+    p = tmp_path / "empty.jsonl"
+    p.write_text("", encoding="utf-8")
+    assert load_trajectory_file(p) == []
+
+
+def test_load_trajectory_file_ignores_blank_lines(tmp_path: Path) -> None:
+    """Lignes blanches JSONL = silencieusement skipées."""
+    p = tmp_path / "traj.jsonl"
+    p.write_text(
+        '{"session_id": "s1"}\n\n\n{"session_id": "s2"}\n',
+        encoding="utf-8",
+    )
+    events = load_trajectory_file(p)
+    assert len(events) == 2
+
+
+def test_load_trajectory_dir_scans_multiple_files(tmp_path: Path) -> None:
+    """Plusieurs .jsonl dans un dossier → tous chargés + groupés par session."""
+    (tmp_path / "a.jsonl").write_text(
+        '{"session_id": "s1", "step": 1}\n'
+        '{"session_id": "s1", "step": 2}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "b.jsonl").write_text(
+        '{"session_id": "s2", "step": 1}\n',
+        encoding="utf-8",
+    )
+    result = load_trajectory_dir(tmp_path)
+    assert set(result.keys()) == {"s1", "s2"}
+    assert len(result["s1"]) == 2
+    assert len(result["s2"]) == 1
+
+
+def test_load_trajectory_dir_missing_raises(tmp_path: Path) -> None:
+    """Dossier absent = FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        load_trajectory_dir(tmp_path / "nope")
+
+
+def test_load_trajectory_dir_not_a_dir_raises(tmp_path: Path) -> None:
+    """Fichier passé comme dossier = NotADirectoryError."""
+    p = tmp_path / "file.jsonl"
+    p.write_text("", encoding="utf-8")
+    with pytest.raises(NotADirectoryError):
+        load_trajectory_dir(p)
+
+
+def test_load_trajectory_dir_empty_returns_empty(tmp_path: Path) -> None:
+    """Dossier sans .jsonl = dict vide."""
+    assert load_trajectory_dir(tmp_path) == {}
+
+
+def test_group_by_session_preserves_order() -> None:
+    """L'ordre au sein d'une session suit l'ordre d'apparition en input."""
+    events = [
+        {"session_id": "s1", "step": 1},
+        {"session_id": "s2", "step": 1},
+        {"session_id": "s1", "step": 2},
+        {"session_id": "s1", "step": 3},
+    ]
+    grouped = group_by_session(events)
+    assert [e["step"] for e in grouped["s1"]] == [1, 2, 3]
+    assert [e["step"] for e in grouped["s2"]] == [1]
+
+
+def test_group_by_session_skips_missing_session_id(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Event sans session_id (clé absente OU None OU "") → skip + warning."""
+    events = [
+        {"session_id": "s1", "step": 1},
+        {"step": 2},  # clé absente
+        {"session_id": None, "step": 3},  # clé None
+        {"session_id": "", "step": 4},  # clé vide
+        {"session_id": "s1", "step": 5},
+    ]
+    grouped = group_by_session(events)
+    assert grouped == {"s1": [events[0], events[4]]}
+    captured = capsys.readouterr()
+    # 3 events skipés → 3 warnings
+    assert captured.err.count("skip event") == 3

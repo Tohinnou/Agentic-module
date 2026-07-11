@@ -1213,4 +1213,16 @@ Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses 
 
 ---
 
+## Phase 7.1 — Trajectory reader
+
+### `src/sandbox/observability/reader.py`
+
+**Skip + warning stderr sur ligne JSONL malformée, PAS crash** : `load_trajectory_file` continue à lire même si la ligne 7 est du JSON invalide — elle est skipée avec un message `[reader] skip file.jsonl:7 — JSON invalide (...)`. Alternative rejetée : `raise json.JSONDecodeError`. Pourquoi la tolérance : (1) **un outil d'audit doit survivre à des trajectoires corrompues** — l'agent qui les a produites a peut-être crashé au milieu d'un dump, laissant une ligne tronquée ; (2) **le pire moment pour crasher un audit tool est POST-crash** — c'est exactement là qu'on en a besoin ; (3) **le warning laisse la trace du skip** — l'humain qui investigue voit "ligne 7 corrompue" et peut aller regarder. Pattern général : *un outil d'observabilité doit être MAXIMALEMENT tolérant à ses inputs — un crash sur donnée malformée transforme l'outil en source d'ignorance supplémentaire. C'est l'inverse d'un composant en boucle chaude (fail-closed) ; ici c'est fail-open avec log*.
+
+**`print(..., file=sys.stderr)` plutôt que `logging.warning()`, choix pragmatique sandbox** : chaque skip émet un message via `print()` directement sur stderr, pas via le module `logging`. Alternative rejetée : configurer un logger `sandbox.observability` avec handlers. Pourquoi le pragmatisme : (1) **le module `logging` requiert un setup (handlers, format, niveau) qui n'existe nulle part dans le sandbox** ; (2) en test, `capsys.readouterr()` capture directement stderr sans mocking spécial ; (3) le nombre de warnings attendu est faible (fichiers de dev, pas prod à haute volumétrie). Coût : si Phase 10+ passe en prod, il faudra migrer vers `logging` pour avoir des handlers structurés (journaux JSON, rotation, filtres). Pattern général : *utiliser `logging` prématurément dans un composant sandbox = configurer une infrastructure qu'on ne va jamais bien exercer. `print(..., file=stderr)` est acceptable tant qu'on documente que c'est un choix conscient et non un oubli*.
+
+**3 fonctions publiques (load_file, load_dir, group_by_session) — séparation I/O / composition / logique pure** : on aurait pu ne garder que `load_trajectory_dir()` qui fait tout. Alternative rejetée : API monolithique. Pourquoi la séparation : (1) **testabilité isolée** — `group_by_session()` est une fonction pure, testable sans tmp_path ni I/O (`test_group_by_session_preserves_order`) ; (2) **flexibilité caller** — un consommateur qui a déjà ses events en mémoire (venus d'un stream, d'une DB, d'un `agent.trajectory`) peut appeler `group_by_session` directement sans passer par les fichiers ; (3) **responsabilités séparées** — `load_trajectory_file` = pure I/O sur un chemin, `group_by_session` = pure logique de regroupement, `load_trajectory_dir` = composition des deux + walk du dossier. Pattern général : *une fonction "orchestratrice" qui compose I/O + logique métier doit exposer aussi les briques qu'elle compose. Un caller qui veut juste la logique ne doit pas être forcé de passer par l'I/O ; réciproquement, un caller qui a fait son I/O autrement doit pouvoir profiter de la logique*.
+
+---
+
 
