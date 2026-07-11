@@ -1225,4 +1225,22 @@ Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses 
 
 ---
 
+## Phase 7.2 — Intent Drift detector
+
+### `src/sandbox/observability/drift.py`
+
+**Chaque helper `_detect_*` retourne `DriftSignal | None`, PAS `list[DriftSignal]`** : la sémantique "1 helper = 1 signal max (ou aucun)". Un helper peut trouver plusieurs OCCURRENCES du même signal (ex. 3 events dupliqués) mais elles sont agrégées dans un unique `DriftSignal.events: tuple[int, ...]`. Alternative rejetée : `list[DriftSignal]` par helper (permettrait plusieurs signaux du même code). Pourquoi Optional-unique : (1) **1 signal = 1 code** — logiquement, "duplicate_action détecté" est un fait binaire, la LISTE des steps est un détail ; (2) **composition triviale au caller** — `[s for s in raw if s is not None]` en 1 ligne ; (3) **pas de "signaux du même code" à dédupliquer** — impossible par construction. Pattern général : *quand un détecteur peut soit trouver soit ne pas trouver (booléen enrichi), retourner `T | None` bat retourner `list[T]` de longueur 0 ou 1. Le type reflète la sémantique — le caller ne se demande jamais "et si j'ai 2 signaux ?", parce que c'est impossible*.
+
+---
+
+### `src/sandbox/observability/__init__.py` (mise à jour 7.2)
+
+**`_SEVERITY_ORDER` dict explicite (`{"none":0, "low":1, "medium":2, "high":3}`) pour le max, PAS comparaison de strings** : le calcul de la sévérité globale du DriftReport est `max_rank = max(_SEVERITY_ORDER[s.severity] for s in signals)`. Alternative rejetée : `max(s.severity for s in signals)` (comparaison lexicographique de strings). Pourquoi le mapping explicite : (1) **piège Python** — `"high" < "low"` est `True` lexicographiquement (h vient avant l), donc `max(["high", "low"]) == "low"` — l'inverse de ce qu'on veut ; (2) **contrat explicite** — le dict documente l'ordre, un futur ajout (`"critical": 4`) se voit dans le dict ; (3) **testable** — on peut tester le mapping séparément. Pattern général : *ne JAMAIS supposer qu'un enum de strings a l'ordre alphabétique qu'on veut. Toujours mapper explicitement enum → rank quand on veut comparer/max. Piège classique qui donne des bugs silencieux (les tests unitaires "max sur 2 valeurs" passent, mais "max sur toute la matrice" fail sur certains couples)*.
+
+**Validation `session_ids cohérents` en tête de `detect_drift()`, avec `ValueError` bruyante** : `session_ids = {e.get("session_id") for e in events}` puis raise si `len(session_ids) > 1`. Alternative rejetée : accepter et retourner un report par session (multi-session dans un seul appel). Pourquoi single-session strict : (1) **contrat clair** — `detect_drift` analyse UNE session ; multi-session = utiliser `group_by_session` puis boucler ; (2) **fail-loud sur input mal formé** — un caller qui mélange 2 sessions a un bug qu'on veut voir immédiatement, pas un DriftReport silencieusement incorrect ; (3) **le `session_id` du report** aurait été ambigu (lequel des 2 mettre ?) — mieux vaut raise que choisir arbitrairement. Pattern général : *un contrat "un input singulier" doit être défendu par validation à l'entrée. Accepter silencieusement une liste 2-sessions et retourner un report sur la première est le pire des mondes — le caller croit avoir analysé les deux*.
+
+**Signaux triés par `code` (ordre alphabétique) dans le report — contrat de déterminisme** : `sorted(signals, key=lambda s: s.code)`. Alternative rejetée : ordre d'apparition (dans le code des helpers). Pourquoi le tri : (1) **déterminisme** — deux appels avec mêmes events → même report (même ordre des signaux). Le test `test_detect_drift_deterministic` en dépend ; (2) **hashable stable** — un `DriftReport` peut être clé de dict ou membre d'un set (tuple frozen + tuple frozen inside) ; (3) **audit lisible** — un human qui lit une liste de reports voit les signaux dans un ordre stable, pas selon un ordre d'implémentation qui peut évoluer. Pattern général : *un contrat de "déterminisme d'output" nécessite un tri explicite sur les collections. L'ordre d'insertion dépend de l'ordre d'exécution, qui dépend de l'ordre des helpers, qui peut changer sans qu'aucun test lexical ne le voit. Tri alphabétique = ordre indépendant de l'implémentation*.
+
+---
+
 

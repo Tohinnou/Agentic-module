@@ -70,6 +70,11 @@ class DriftReport:
     severity: Severity = "none"
 
 
+# Ordre de sévérité pour le calcul du max (typé pour éviter la comparaison
+# de strings arbitraire — "high" < "low" lexicographiquement, on ne veut pas).
+_SEVERITY_ORDER: dict[Severity, int] = {"none": 0, "low": 1, "medium": 2, "high": 3}
+
+
 def detect_drift(
     events: list[dict[str, Any]],
     *,
@@ -79,14 +84,12 @@ def detect_drift(
     Analyse une session (liste d'events) et retourne un `DriftReport`.
 
     Séquence :
-    1. Identifier `session_id` depuis les events (tous doivent partager le même).
-    2. Détecter les 4 signaux (§meta/intent_drift_signals.md) :
-       - policy_block_encountered
-       - hitl_bypassed
-       - unexpected_tool_sequence
-       - duplicate_action
-    3. Calculer la sévérité globale = max des signal severities (ou "none").
-    4. Retourner un DriftReport immuable.
+    1. Valider que la liste n'est pas vide (ValueError sinon).
+    2. Identifier `session_id` (tous les events doivent partager le même).
+    3. Détecter les 4 signaux via les helpers privés de `drift.py`.
+    4. Calculer la sévérité globale = max des signal severities, ou "none"
+       si aucun signal.
+    5. Retourner un DriftReport immuable, signaux triés par code (alpha).
 
     Contrat comportemental :
     - Ne mute jamais `events` (analyse read-only).
@@ -106,14 +109,47 @@ def detect_drift(
         DriftReport immuable.
 
     Raises:
-        NotImplementedError: tant que Phase 7.2 non complétée.
         ValueError: si events est vide ou session_ids incohérents.
     """
-    raise NotImplementedError(
-        "Phase 7.2 implémentera detect_drift(). "
-        "Phase 7.0 pose les contrats (DriftReport, DriftSignal). "
-        "Phase 7.1 fournit le reader qui produit les events."
+    if not events:
+        raise ValueError("detect_drift : liste d'events vide, rien à analyser")
+
+    session_ids = {e.get("session_id") for e in events}
+    if len(session_ids) > 1:
+        raise ValueError(
+            f"detect_drift : session_ids incohérents dans la liste : {session_ids}"
+        )
+    session_id = events[0].get("session_id")
+    if not session_id:
+        raise ValueError("detect_drift : session_id absent ou vide sur les events")
+
+    # Import déféré : évite le circular (drift.py importe DriftSignal depuis
+    # ici). Même pattern que policy_server/__init__.py -> structural_gate.
+    from .drift import (
+        _detect_duplicate_action,
+        _detect_hitl_bypassed,
+        _detect_policy_block,
+        _detect_unexpected_sequence,
     )
+
+    raw_signals = [
+        _detect_policy_block(events),
+        _detect_hitl_bypassed(events),
+        _detect_unexpected_sequence(events, expected_agent),
+        _detect_duplicate_action(events),
+    ]
+    # Filter None, trier par code (contrat : ordre alphabétique).
+    signals = tuple(sorted((s for s in raw_signals if s is not None), key=lambda s: s.code))
+
+    # Sévérité globale = max via _SEVERITY_ORDER (pas de comparaison de strings).
+    if not signals:
+        severity: Severity = "none"
+    else:
+        max_rank = max(_SEVERITY_ORDER[s.severity] for s in signals)
+        # Inverse lookup rank → label.
+        severity = next(k for k, v in _SEVERITY_ORDER.items() if v == max_rank)
+
+    return DriftReport(session_id=session_id, signals=signals, severity=severity)
 
 
 __all__ = [
