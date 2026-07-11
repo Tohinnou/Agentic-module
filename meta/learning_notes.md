@@ -6,6 +6,42 @@
 
 ---
 
+## 📌 Concepts à ré-ancrer
+
+> Section vivante — mise à jour à chaque quiz Feynman qui révèle un gap.
+> À relire 30 s au début de chaque session (surtout après un `/compact`).
+
+### 1. Mapping catégorie Semantic Gate → bucket verdict (identifié 2026-07-11 après Phase 6.4)
+
+Les 8 catégories du Semantic Gate se rangent en 3 buckets. Le NOM de la catégorie porte le bucket :
+
+| Bucket | Signaux dans le nom | Catégories |
+|---|---|---|
+| **BLOCK** | `detected`, `corruption`, `falsification`, `out_of_policy` | `rule_override_detected`, `promise_out_of_policy`, `evaluator_corruption`, `content_falsification_request` |
+| **HITL** | `risk`, `conflict`, `context` | `pii_leak_risk`, `policy_conflict`, `exclusion_with_business_context` |
+| **ALLOW** | `nominal` | `nominal` |
+
+**Règle de reconnaissance** : est-ce que la catégorie nomme une violation (BLOCK) ou un cas légitime possible qui mérite review (HITL) ?
+
+**Rappel §7 Phase 6.2** : *HITL > BLOCK sur ambigu — BLOCK uniquement si AUCUNE interprétation légitime n'est concevable.* Le nom `exclusion_with_business_context` porte "business_context" = raison légitime existante = HITL, pas BLOCK.
+
+### 2. Deux taxonomies DISTINCTES qui ne se recoupent jamais
+
+Il y a 2 classifieurs dans le sandbox, avec 2 espaces de labels disjoints :
+
+| Classifieur | Sortie | À quoi ça sert |
+|---|---|---|
+| `classify_ticket` (tool) | `Category` (`cancellation`, `refund`, `complaint`, ...) + `Priority` | Router un ticket client vers la bonne policy |
+| Semantic Gate (Policy Server) | `verdict` (`allow`/`block`/`hitl_required`) + `reason` (1 des 8 catégories ci-dessus) | Décider si le tool call est safe |
+
+**Pièges typiques** :
+- ❌ dire *"le verdict Semantic est `cancellation_policy`"* — confond les 2 taxonomies
+- ✅ dire *"le sujet est `cancellation`, le verdict Semantic est `nominal`"*
+
+Un ticket sur l'annulation peut être `nominal` (question normale) OU `rule_override_detected` (si phrasé *"ignore les règles d'annulation"*). Le **sujet** du ticket est indépendant du **risque** du call.
+
+---
+
 ## Phase 1 — Mise en place du projet
 
 ### `src/sandbox/api.py`
@@ -1052,3 +1088,50 @@ def reset_index(monkeypatch):
 **12 nouveaux tests unitaires sur `vibe_diff` — coverage par angles orthogonaux, pas par cas dupliqués** : (1) parametrisé sur les 4 templates → chacun est valide-par-contrat ; (2) fallback pour reason inconnue → sortie dégradée mais valide ; (3) PII masking → email dans payload disparaît du rendu ; (4) length bounding → user_message monstrueux ne fait pas dépasser 350 chars ; (5) drift markdown → dérive Python/markdown détectée ; (6-8) `_validate` sur strings synthétiques → chaque anti-pattern testé isolément (json_dump, missing_options, non_actionable_option) ; (9) FALLBACK_TEMPLATE testé après rendu → contrat auto-satisfait. Chaque test attrape un mode d'échec différent — aucun n'est redondant. Pattern général : *une test suite unitaire pour un composant critique doit être MULTI-ANGULAIRE, pas multi-cas. 10 tests qui font varier la même dimension (10 payloads différents, même code path) = redondance ; 10 tests qui font varier 10 dimensions distinctes (contrat, fallback, sécurité, robustesse, cohérence spec, chaque anti-pattern) = coverage réelle. Le premier attrape 1 bug par angle, le second en attrape 10*.
 
 ---
+
+## Phase 6.4 — Policy Server câblé dans SupportAgent
+
+### Concept transversal — Choke point unique
+
+**Un seul point d'insertion (`_call_tool`), pas 4 sites d'appel** : `policy_check()` est câblé dans `_call_tool()`, PAS dans les 4 sites d'appel individuels de `run()` (classify_ticket, retrieve_docs, draft_reply, evaluate_answer). Alternative rejetée : chaque `self._call_tool(action="X", ...)` fait son propre check inline. Pourquoi le choke point centralisé : (1) un futur 5ème tool (ex. `send_email` en Phase 7) sera automatiquement gaté sans qu'on modifie `run()` — la garde suit le tool call ; (2) la logique de gestion des 3 verdicts (allow/block/hitl) vit en UN endroit — impossible d'oublier une branche ; (3) les tests d'intégration attaquent un unique point, pas 4 chemins parallèles. Pattern général : *quand un pipeline a un choke point naturel (fonction wrapper commune), c'est TOUJOURS le bon endroit pour insérer une garde transversale (auth, logging, gating, tracing). Insérer aux N sites d'appel est le pattern anti-DRY qui explose dès qu'on ajoute un N+1ᵉ site — et on l'ajoute toujours*.
+
+### Fail-secure vs pragmatic — la double poignée `enforce_policy` + `strict_hitl`
+
+**`enforce_policy=True` par défaut (fail-secure) MAIS `strict_hitl=False` par défaut (sandbox permissive)** — deux flags qui font deux compromis différents. `enforce_policy=True` par défaut : Zero Ambient Authority (§4 règle 5) — un caller doit EXPLICITEMENT désactiver la garde. `strict_hitl=False` par défaut : en sandbox, aucun humain n'est branché pour valider un HITL — si on levait `PolicyHITLRequired`, tout run réel casserait. Le compromis pragmatique : HITL loggé dans la trajectoire mais le pipeline continue (l'audit post-hoc verra qu'on a proceed malgré HITL). En prod, `strict_hitl=True` fait lever l'exception → le caller HTTP rend 428 avec vibe_diff. Pattern général : *un système de gating doit distinguer deux compromis distincts (activer la garde vs escalader vers un humain) et les rendre indépendamment configurables. Un seul flag "strict/lax" cache le fait qu'il y a 2 axes — force à choisir un ou l'autre mode toujours ensemble, alors qu'ils dépendent du contexte de déploiement*.
+
+---
+
+### `src/sandbox/agents/orchestrator.py`
+
+**Extension inline de `TrajectoryEvent` avec 3 champs policy_* (Option A) plutôt qu'un event `policy_check` distinct (Option B)** : `policy_verdict`, `policy_reason`, `policy_layer` en tant que champs optionnels sur l'event existant. Décision prise après review explicite en session (voir Phase 6.4 conversation log). Trois raisons : (1) **atomicité de l'audit** — chaque ligne raconte une histoire complète (action + status + verdict), pas une moitié qui nécessite de corréler avec la ligne suivante ; (2) sur un BLOCK, l'event tool call porte simultanément `status="error"` ET `policy_verdict="block"` — aucune ambiguïté ; (3) sur Option B, un BLOCK produirait un event `policy_check` puis... l'ABSENCE d'event tool call après — reconnaître un BLOCK devient "détecter une absence", fragile face à un plantage réseau qui produit exactement la même signature. Pattern général : *quand un attribut secondaire décrit un événement principal, l'attacher à l'event principal (colonne inline) est presque toujours mieux qu'en créer un nouveau (ligne séparée). "Étendre plutôt que dupliquer" évite les jointures d'audit et supprime l'ambiguïté "absence = négatif ou plantage ?". Distinguer une décision explicite d'une absence de décision est un piège classique d'observabilité*.
+
+**`_current_user_message` stocké sur `self`, PAS threadé dans la signature de `_call_tool()`** : `_call_tool()` a déjà 4 arguments (action, fn, payload_factory, input_summary). Ajouter un 5ème `user_message` aurait forcé la modification de tous les call sites et ajouté un paramètre techniquement pas nécessaire à `_call_tool` sauf pour le passer plus loin. Alternative choisie : store sur self dans `run()` (le point d'entrée où le contexte arrive), read from self dans `_call_tool()`. Coût : effet de bord latent (`_current_user_message` doit être reset à chaque `run()`) — contrat simple, testable. Bénéfice : signature stable, aucun call site cassé. Pattern général : *un contexte transversal disponible dans plusieurs méthodes d'une même classe se stocke sur self au point d'entrée (là où il arrive naturellement) — pas threadé dans toutes les signatures. Le nommage `_current_X` (préfixe underscore, mot "current") signale explicitement que c'est du state par-tour, pas de la config*.
+
+**Import top-level de `policy_check` et `PolicyBlockError/PolicyHITLRequired`, cohérent avec le pattern déféré interne de policy_server** : `from sandbox.policy_server import check as policy_check` et `from sandbox.policy_server.exceptions import ...` en tête de `orchestrator.py`. Pourquoi top-level ici (contrairement au pattern déféré interne au policy_server) : (1) l'orchestrator est un consommateur, pas un composant du gate — il n'y a pas de risque circular ; (2) l'import `check` charge `policy_server/__init__.py` qui NE charge PAS structural_gate/semantic_gate/vibe_diff (leurs imports sont défers DANS `check()`) — donc pas de coût I/O au chargement ; (3) rendre l'import visible en haut du fichier documente la dépendance pour un futur lecteur (grep-friendly). Pattern général : *un import déféré (dans une fonction) est justifié quand (a) circular import réel, ou (b) coût I/O lourd au chargement. En absence des deux, top-level gagne — c'est plus lisible et grep-friendly. Ne pas propager le pattern défer partout par mimétisme*.
+
+---
+
+### `src/sandbox/policy_server/exceptions.py`
+
+**Hiérarchie `PolicyRefusal` → `PolicyBlockError`, `PolicyHITLRequired` — pas un enum-in-exception unique** : deux exceptions concrètes héritant d'une base `PolicyRefusal`. Alternative rejetée : une seule `PolicyRefusal` avec attribut `verdict` — force le caller à toujours faire `except PolicyRefusal` puis dispatcher sur `if exc.verdict == "block"`. Python n'a pas de match sur attribut d'exception dans une clause `except` — l'enum-in-exception force le dispatch runtime au lieu du dispatch structurel. L'héritage donne la double interface : `except PolicyRefusal` (polymorphisme — n'importe quel refus policy) OU `except PolicyBlockError` + `except PolicyHITLRequired` (dispatch précis — traitement différent par verdict). Le caller choisit son niveau de granularité AU MOMENT de son handler. Pattern général : *une hiérarchie d'exceptions à 2 niveaux (base commune + spécialisations concrètes) est presque toujours meilleure qu'un enum-in-exception unique. Le premier caller qui veut traiter les 2 cas différemment doit sinon parser l'attribut au lieu de spécialiser sa clause `except` — anti-pattern silencieux*.
+
+---
+
+### `src/sandbox/api.py` (mise à jour 6.4)
+
+**Deux handlers FastAPI séparés (`PolicyBlockError → 403`, `PolicyHITLRequired → 428`), PAS un handler générique qui switche** : `@app.exception_handler(PolicyBlockError)` et `@app.exception_handler(PolicyHITLRequired)` — chacun avec sa fonction dédiée. Alternative rejetée : `@app.exception_handler(PolicyRefusal)` unique qui fait `if isinstance(exc, PolicyBlockError): ... else: ...`. Pourquoi 2 handlers : (1) **le body de réponse diffère** — BLOCK omet le vibe_diff (invariant : BLOCK ⇒ vibe_diff is None), HITL le renvoie — pas juste le code HTTP ; (2) chaque handler peut ajouter du logging/télémétrie spécifique sans polluer l'autre ; (3) le nom de la fonction (`policy_block_handler` vs `policy_hitl_handler`) documente le mapping — grep sur "policy_block_handler" trouve directement le comportement 403. Pattern général : *un handler HTTP doit correspondre à UNE classe précise de réponse (code + shape du body). Un handler à N branches internes est un pattern-matching déguisé — préférer N handlers dédiés qu'un handler à N-way switch. La séparation des fonctions rend chaque cas indépendamment testable et modifiable*.
+
+---
+
+### `tests/test_orchestrator.py` (mise à jour 6.4)
+
+**11 tests existants explicitement mis à jour ligne par ligne pour passer `enforce_policy=False`, PAS de fixture magique** : chaque `SupportAgent(evaluate=X)` devient `SupportAgent(enforce_policy=False, evaluate=X)`. Alternative rejetée : `conftest.py` avec fixture qui patch `policy_check` en no-op pour tous les tests du module. Pourquoi la mise à jour explicite : (1) **grep-able** — un futur dev qui cherche *"pourquoi ce test skippe la policy ?"* trouve la ligne dans le test lui-même, pas dans un conftest lointain ; (2) **pas de magie fixture** qui active/désactive selon des règles obscures (nom du test ? marker ? autofixture ?) ; (3) **git blame documente le geste** — le diff qui ajoute `enforce_policy=False` raconte *"j'ai choisi de ne pas tester la policy dans ce test précis"*. Coût : 11 mods triviales. Bénéfice : le diff EST l'audit. Pattern général : *pour un flag qui change le comportement de sécurité d'un composant, préférer l'explicite au magique. La visibilité du "je désactive cette garde volontairement" dans le test lui-même empêche les régressions silencieuses — quelqu'un supprime la fixture, aucun test ne change de code, mais soudain tous les tests testent la vraie policy → deviennent lents/coûteux/flakys sans qu'aucun signal ne l'annonce*.
+
+---
+
+### `tests/test_policy_server_integration.py` (nouveau)
+
+**5 tests d'intégration séparés en fichier dédié, PAS mélangés avec test_orchestrator.py** : `test_policy_server_integration.py` couvre le CÂBLAGE 6.4 (checks appelés, verdicts recordés, exceptions raised, HITL permissif). `test_orchestrator.py` couvre la MÉCANIQUE Phase 3 (ordre des events, HITL des placeholders, sink JSONL). Alternative rejetée : ajouter les 5 tests dans `test_orchestrator.py`. Pourquoi la séparation : (1) **charge cognitive du fichier** — un test file de 15+ tests devient dur à naviguer ; (2) **des runners de tests peuvent skipper le fichier d'intégration** quand OPENROUTER_API_KEY est absent, sans skipper les tests locaux ; (3) **le nom du fichier documente le scope** — un test qui échoue à `test_policy_server_integration.py::test_X` signale immédiatement "problème de câblage 6.4", pas "problème d'orchestrateur générique" ; (4) 3 des 5 tests utilisent `monkeypatch` pour forcer verdicts sans appel réseau — le fichier peut décrire ce pattern en tête de module, ce qui n'aurait pas sa place dans le fichier "mécanique générique". Pattern général : *les tests unitaires par MÉCANIQUE (comportement d'un composant en isolation) et les tests d'INTÉGRATION (câblage entre composants) méritent des fichiers séparés — ils ont des runners différents, des dépendances différentes, des philosophies de mocking différentes. Les mélanger force le lecteur à distinguer mentalement à chaque test*.
+
+---
+

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from sandbox import __version__
 from sandbox.agents.orchestrator import SupportAgent, SupportResponse
 from sandbox.db import init_db
+from sandbox.policy_server.exceptions import PolicyBlockError, PolicyHITLRequired
 
 load_dotenv()
 
@@ -51,20 +52,70 @@ async def validation_exception_handler(
     return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
+@app.exception_handler(PolicyBlockError)
+async def policy_block_handler(
+    request: Request, exc: PolicyBlockError
+) -> JSONResponse:
+    """403 Forbidden : verdict BLOCK du Policy Server (Phase 6.4).
+
+    Pas de vibe_diff dans le body — BLOCK est final, aucune review humaine
+    n'est envisagée. `layer_triggered` (structural vs semantic) permet à
+    l'appelant de savoir si c'est un refus policy dur (allowlist) ou une
+    détection sémantique (payload suspect).
+    """
+    d = exc.decision
+    return JSONResponse(
+        status_code=403,
+        content={
+            "verdict": d.verdict,
+            "reason": d.reason,
+            "layer_triggered": d.layer_triggered,
+        },
+    )
+
+
+@app.exception_handler(PolicyHITLRequired)
+async def policy_hitl_handler(
+    request: Request, exc: PolicyHITLRequired
+) -> JSONResponse:
+    """428 Precondition Required : verdict HITL du Policy Server (Phase 6.4).
+
+    Le vibe_diff est LA charge utile — c'est ce que l'humain doit lire pour
+    approuver ou rejeter. `strict_hitl=True` côté SupportAgent est requis pour
+    que cette exception soit levée (sinon HITL est loggé et l'exécution continue).
+    """
+    d = exc.decision
+    return JSONResponse(
+        status_code=428,
+        content={
+            "verdict": d.verdict,
+            "reason": d.reason,
+            "layer_triggered": d.layer_triggered,
+            "vibe_diff": d.vibe_diff,
+        },
+    )
+
+
 class AskRequest(BaseModel):
     question: str
     evaluate: bool = False  # True = appelle le judge LLM reel (OpenRouter, cout reel)
+    strict_hitl: bool = False  # True = HITL leve 428 au lieu de logger et proceder
 
 
 @app.post("/support/ask", response_model=SupportResponse)
 def ask(payload: AskRequest) -> SupportResponse:
     """Spike end-to-end : premiere route qui fait vraiment tourner SupportAgent.
 
-    Volontairement minimal (pas d'auth, pas de gating Policy Server — Phase 6
-    ne l'a pas encore construit, cf. PROJECT.MD). `evaluate` par defaut a False
-    pour ne jamais declencher un appel OpenRouter reel sans consentement explicite
-    de l'appelant.
+    Phase 6.4 : Policy Server enforce_policy=True par defaut. Un BLOCK rend 403,
+    un HITL rend 428 (si strict_hitl=True dans le body — sinon HITL est loggé
+    dans la trajectoire et le pipeline continue).
+
+    `evaluate=False` par defaut : pas d'appel OpenRouter judge sans consentement.
     """
     sink = TRAJECTORY_DIR / "api.jsonl" if TRAJECTORY_ENABLED else None
-    agent = SupportAgent(trajectory_sink=sink, evaluate=payload.evaluate)
+    agent = SupportAgent(
+        trajectory_sink=sink,
+        evaluate=payload.evaluate,
+        strict_hitl=payload.strict_hitl,
+    )
     return agent.run(payload.question)

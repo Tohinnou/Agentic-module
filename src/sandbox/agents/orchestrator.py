@@ -30,6 +30,7 @@ substituer les placeholders avant tout `send_email` (qui n'existe pas encore).
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -39,6 +40,8 @@ from typing import Callable, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 from sandbox.classification.rules import Category, Priority
+from sandbox.policy_server import check as policy_check
+from sandbox.policy_server.exceptions import PolicyBlockError, PolicyHITLRequired
 from sandbox.tools import classify_ticket as _classify_mod
 from sandbox.tools import draft_reply as _draft_mod
 from sandbox.tools import evaluate_answer as _evaluate_mod
@@ -86,12 +89,20 @@ _TOOL_RISK: dict[str, RiskLevel] = {
 }
 
 
+PolicyVerdict = Literal["allow", "block", "hitl_required"]
+PolicyLayer = Literal["structural", "semantic"]
+
+
 class TrajectoryEvent(BaseModel):
     """Un tour de l'agent : quel tool a été invoqué, avec quel résumé I/O, timing.
 
     Format inspiré d'OpenTelemetry (span-like), sérialisable en JSONL.
     Aligné sur l'exemple TrajectoryEvent de PROJECT.MD Phase 7, avec le
     vocabulaire risk verrouillé sur celui de TOOL_METADATA.
+
+    Champs `policy_*` (Phase 6.4) : présents seulement quand `enforce_policy=True`.
+    Ils portent le verdict du Policy Server pour ce tool call. Utile pour l'audit
+    post-hoc : *pourquoi ce tool a-t-il été autorisé/refusé ?*
     """
 
     session_id: str
@@ -104,6 +115,10 @@ class TrajectoryEvent(BaseModel):
     output_summary: str
     timestamp: str  # UTC ISO 8601
     duration_ms: int = Field(..., ge=0)
+    # Phase 6.4 — Policy Server verdict (optionnel : None si enforce_policy=False)
+    policy_verdict: PolicyVerdict | None = None
+    policy_reason: str | None = None
+    policy_layer: PolicyLayer | None = None
 
 
 class SupportResponse(BaseModel):
@@ -134,7 +149,17 @@ class SupportAgent:
 
     Une instance = une session logique (session_id fixe). Chaque `run()` = un
     tour de conversation avec sa propre trajectoire (steps repartent à 1).
+
+    Phase 6.4 — chaque tool call passe par `policy_server.check()` avant
+    exécution quand `enforce_policy=True` (défaut). Un BLOCK verdict lève
+    `PolicyBlockError` ; un HITL_REQUIRED verdict est loggé et, si
+    `strict_hitl=True`, lève `PolicyHITLRequired` — sinon proceed (mode
+    sandbox où aucun humain n'est branché).
     """
+
+    # Nom d'agent utilisé pour le lookup allowlist dans meta/agent_security_policy.md.
+    # Constante de classe = source de vérité unique, jamais overridée par instance.
+    AGENT_NAME = "support_agent"
 
     def __init__(
         self,
@@ -142,14 +167,30 @@ class SupportAgent:
         trajectory_sink: Path | None = None,
         session_id: str | None = None,
         evaluate: bool = True,
+        enforce_policy: bool = True,
+        strict_hitl: bool = False,
+        env: str | None = None,
     ) -> None:
         self.trajectory_sink = trajectory_sink
         # session_id fourni → tests déterministes ; sinon uuid tronqué (8 hex
         # suffisent pour la lisibilité, unicité largement suffisante en sandbox).
         self.session_id = session_id or f"s-{uuid.uuid4().hex[:8]}"
         self.evaluate = evaluate
+        # Phase 6.4 — Policy Server gating
+        # Fail-secure par défaut : enforce_policy=True. Les tests unitaires qui
+        # exercent la mécanique du pipeline (pas la policy) doivent explicitement
+        # passer enforce_policy=False.
+        self.enforce_policy = enforce_policy
+        # strict_hitl=False en sandbox : HITL loggé mais on proceed (pas d'humain
+        # à interpeller). En prod, strict_hitl=True fait lever PolicyHITLRequired
+        # et le caller (endpoint HTTP) rend un 428 avec le vibe_diff.
+        self.strict_hitl = strict_hitl
+        # env : lu depuis SANDBOX_ENV si non passé. Résolu UNE fois au __init__
+        # (jamais re-lu au fil des runs — un agent instancié en "dev" reste "dev").
+        self.env = env or os.environ.get("SANDBOX_ENV", "dev")
         self._step_counter = 0
         self._trajectory: list[TrajectoryEvent] = []
+        self._current_user_message: str = ""  # thread-through pour _call_tool
 
     @property
     def trajectory(self) -> list[TrajectoryEvent]:
@@ -161,6 +202,10 @@ class SupportAgent:
         # Reset per-run : chaque run() est atomique côté trace.
         self._step_counter = 0
         self._trajectory = []
+        # Phase 6.4 — la question originale est nécessaire au Semantic Gate
+        # (contexte d'intention). On la stocke pour que `_call_tool` la lise
+        # sans qu'on ait à threader un param dans chaque appel.
+        self._current_user_message = question
 
         try:
             classification: ClassifyTicketOutput = self._call_tool(
@@ -239,18 +284,75 @@ class SupportAgent:
         payload_factory: Callable[[], BaseModel],
         input_summary: str,
     ) -> T:
-        """Wrap un appel de tool : timing, event success/error, propagation.
+        """Wrap un appel de tool : Policy check → timing → event success/error.
 
         `payload_factory` (pas un `payload` déjà construit) : la validation
         Pydantic doit se produire *dans* ce try/except, sinon une entrée
         invalide lève avant tout `_record()` et la trajectoire perd le tour
         en échec (CLAUDE.md règle 7 — 100% des tours tracés, y compris ratés).
+
+        Phase 6.4 : après construction du payload, `policy_server.check()` est
+        invoqué. BLOCK lève `PolicyBlockError` (avec un event trajectoire),
+        HITL_REQUIRED lève `PolicyHITLRequired` seulement si `strict_hitl=True`,
+        sinon on log et proceed (mode sandbox permissif).
         """
         risk = _TOOL_RISK[action]
         start = time.perf_counter()
+        policy_verdict: PolicyVerdict | None = None
+        policy_reason: str | None = None
+        policy_layer: PolicyLayer | None = None
         try:
             payload = payload_factory()
+
+            if self.enforce_policy:
+                decision = policy_check(
+                    agent=self.AGENT_NAME,
+                    env=self.env,
+                    tool=action,
+                    payload=payload.model_dump(),
+                    user_message=self._current_user_message,
+                )
+                policy_verdict = decision.verdict
+                policy_reason = decision.reason
+                policy_layer = decision.layer_triggered
+
+                if decision.verdict == "block":
+                    # BLOCK est final — trajectoire loggée avec verdict, puis raise.
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    self._record(
+                        action=action,
+                        risk=risk,
+                        status="error",
+                        input_summary=input_summary,
+                        output_summary=f"blocked_by_policy: {decision.reason}",
+                        duration_ms=duration_ms,
+                        policy_verdict=policy_verdict,
+                        policy_reason=policy_reason,
+                        policy_layer=policy_layer,
+                    )
+                    raise PolicyBlockError(decision)
+
+                if decision.verdict == "hitl_required" and self.strict_hitl:
+                    # En strict, HITL bloque l'exécution — vibe_diff transporté
+                    # dans l'exception pour que le caller HTTP rende 428.
+                    duration_ms = int((time.perf_counter() - start) * 1000)
+                    self._record(
+                        action=action,
+                        risk=risk,
+                        status="error",
+                        input_summary=input_summary,
+                        output_summary=f"hitl_required: {decision.reason}",
+                        duration_ms=duration_ms,
+                        policy_verdict=policy_verdict,
+                        policy_reason=policy_reason,
+                        policy_layer=policy_layer,
+                    )
+                    raise PolicyHITLRequired(decision)
+
             result = fn(payload)
+        except (PolicyBlockError, PolicyHITLRequired):
+            # Déjà loggées avec verdict avant le raise — on remonte.
+            raise
         except Exception as exc:
             duration_ms = int((time.perf_counter() - start) * 1000)
             self._record(
@@ -260,6 +362,9 @@ class SupportAgent:
                 input_summary=input_summary,
                 output_summary=f"{type(exc).__name__}: {exc}",
                 duration_ms=duration_ms,
+                policy_verdict=policy_verdict,
+                policy_reason=policy_reason,
+                policy_layer=policy_layer,
             )
             raise
         duration_ms = int((time.perf_counter() - start) * 1000)
@@ -270,6 +375,9 @@ class SupportAgent:
             input_summary=input_summary,
             output_summary=_summarize_output(result),
             duration_ms=duration_ms,
+            policy_verdict=policy_verdict,
+            policy_reason=policy_reason,
+            policy_layer=policy_layer,
         )
         return result
 
@@ -282,6 +390,9 @@ class SupportAgent:
         input_summary: str,
         output_summary: str,
         duration_ms: int,
+        policy_verdict: PolicyVerdict | None = None,
+        policy_reason: str | None = None,
+        policy_layer: PolicyLayer | None = None,
     ) -> None:
         self._step_counter += 1
         self._trajectory.append(
@@ -295,6 +406,9 @@ class SupportAgent:
                 output_summary=_truncate(output_summary),
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 duration_ms=duration_ms,
+                policy_verdict=policy_verdict,
+                policy_reason=policy_reason,
+                policy_layer=policy_layer,
             )
         )
 
