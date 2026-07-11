@@ -166,14 +166,14 @@ class SupportAgent:
             classification: ClassifyTicketOutput = self._call_tool(
                 action="classify_ticket",
                 fn=classify_ticket,
-                payload=ClassifyTicketInput(text=question),
+                payload_factory=lambda: ClassifyTicketInput(text=question),
                 input_summary=f"question: {question}",
             )
 
             retrieval: RetrieveDocsOutput = self._call_tool(
                 action="retrieve_docs",
                 fn=retrieve_docs,
-                payload=RetrieveDocsInput(query=question, top_k=3),
+                payload_factory=lambda: RetrieveDocsInput(query=question, top_k=3),
                 input_summary=f"query: {question}",
             )
             if not retrieval.results:
@@ -185,7 +185,7 @@ class SupportAgent:
             draft: DraftReplyOutput = self._call_tool(
                 action="draft_reply",
                 fn=draft_reply,
-                payload=DraftReplyInput(
+                payload_factory=lambda: DraftReplyInput(
                     category=classification.category,
                     priority=classification.priority,
                     policy_doc_id=top_doc.doc_id,
@@ -202,7 +202,7 @@ class SupportAgent:
                 evaluation = self._call_tool(
                     action="evaluate_answer",
                     fn=evaluate_answer,
-                    payload=EvaluateAnswerInput(
+                    payload_factory=lambda: EvaluateAnswerInput(
                         customer_request=question,
                         category=classification.category,
                         cited_policy_id=top_doc.doc_id,
@@ -236,13 +236,20 @@ class SupportAgent:
         *,
         action: str,
         fn: Callable[..., T],
-        payload: BaseModel,
+        payload_factory: Callable[[], BaseModel],
         input_summary: str,
     ) -> T:
-        """Wrap un appel de tool : timing, event success/error, propagation."""
+        """Wrap un appel de tool : timing, event success/error, propagation.
+
+        `payload_factory` (pas un `payload` déjà construit) : la validation
+        Pydantic doit se produire *dans* ce try/except, sinon une entrée
+        invalide lève avant tout `_record()` et la trajectoire perd le tour
+        en échec (CLAUDE.md règle 7 — 100% des tours tracés, y compris ratés).
+        """
         risk = _TOOL_RISK[action]
         start = time.perf_counter()
         try:
+            payload = payload_factory()
             result = fn(payload)
         except Exception as exc:
             duration_ms = int((time.perf_counter() - start) * 1000)
