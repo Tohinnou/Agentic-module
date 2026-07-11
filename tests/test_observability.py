@@ -366,3 +366,145 @@ def test_group_by_session_skips_missing_session_id(
     captured = capsys.readouterr()
     # 3 events skipés → 3 warnings
     assert captured.err.count("skip event") == 3
+
+
+# ─── Tests CLI report (Phase 7.3) ─────────────────────────────────────
+
+
+from sandbox.observability.report import (  # noqa: E402
+    analyze_directory,
+    format_report_table,
+    main,
+)
+
+
+def test_format_report_table_empty() -> None:
+    """Liste vide → message explicite, pas juste un header vide."""
+    output = format_report_table([])
+    assert "Aucune session" in output
+
+
+def test_format_report_table_nominal() -> None:
+    """Une session nominale → ligne '(nominal)' dans la colonne signals."""
+    report = DriftReport(session_id="s-nominal", signals=(), severity="none")
+    output = format_report_table([report])
+    assert "s-nominal" in output
+    assert "none" in output
+    assert "(nominal)" in output
+
+
+def test_format_report_table_multi_severity() -> None:
+    """Plusieurs reports avec sévérités mélangées → toutes rendues."""
+    reports = [
+        DriftReport(session_id="s1", signals=(), severity="none"),
+        DriftReport(
+            session_id="s2",
+            signals=(DriftSignal(code="hitl_bypassed", severity="medium", detail="", events=()),),
+            severity="medium",
+        ),
+        DriftReport(
+            session_id="s3",
+            signals=(DriftSignal(code="policy_block_encountered", severity="high", detail="", events=()),),
+            severity="high",
+        ),
+    ]
+    output = format_report_table(reports)
+    assert "s1" in output and "s2" in output and "s3" in output
+    assert "hitl_bypassed" in output
+    assert "policy_block_encountered" in output
+
+
+def _write_session_jsonl(path: Path, session_id: str, events: list[dict[str, Any]]) -> None:
+    """Écrit une session complète dans un .jsonl (helper de test)."""
+    import json
+    lines = []
+    for i, e in enumerate(events, start=1):
+        line = {
+            "session_id": session_id,
+            "step": i,
+            "agent": "support_agent",
+            "risk": "read",
+            "status": e.get("status", "success"),
+            "input_summary": "",
+            "output_summary": "",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "duration_ms": 0,
+            **e,
+        }
+        lines.append(json.dumps(line))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_analyze_directory_returns_one_report_per_session(tmp_path: Path) -> None:
+    """Un dossier avec 2 sessions → 2 reports."""
+    _write_session_jsonl(
+        tmp_path / "s1.jsonl",
+        "s1",
+        [
+            {"action": "classify_ticket", "policy_verdict": "allow"},
+            {"action": "retrieve_docs", "policy_verdict": "allow"},
+            {"action": "draft_reply", "policy_verdict": "allow"},
+        ],
+    )
+    _write_session_jsonl(
+        tmp_path / "s2.jsonl",
+        "s2",
+        [
+            {"action": "classify_ticket", "policy_verdict": "block", "status": "error"},
+        ],
+    )
+    reports = analyze_directory(tmp_path, expected_agent="support_agent")
+    assert len(reports) == 2
+    by_id = {r.session_id: r for r in reports}
+    assert by_id["s1"].severity == "none"
+    assert by_id["s2"].severity == "high"  # policy_block + unexpected_sequence
+
+
+def test_main_returns_0_on_nominal_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Exit 0 si aucune session high-severity."""
+    _write_session_jsonl(
+        tmp_path / "nominal.jsonl",
+        "s-nominal",
+        [
+            {"action": "classify_ticket", "policy_verdict": "allow"},
+            {"action": "retrieve_docs", "policy_verdict": "allow"},
+            {"action": "draft_reply", "policy_verdict": "allow"},
+        ],
+    )
+    exit_code = main(["--path", str(tmp_path)])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "s-nominal" in captured.out
+
+
+def test_main_returns_1_on_high_severity(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Exit 1 dès qu'une session est severity=high."""
+    _write_session_jsonl(
+        tmp_path / "block.jsonl",
+        "s-blocked",
+        [
+            {"action": "classify_ticket", "policy_verdict": "block", "status": "error"},
+        ],
+    )
+    exit_code = main(["--path", str(tmp_path)])
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "high" in captured.out
+
+
+def test_main_returns_2_on_missing_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Exit 2 si le path fourni n'existe pas."""
+    exit_code = main(["--path", str(tmp_path / "nope")])
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert "introuvable" in captured.err
+
+
+def test_main_prints_empty_message_on_empty_dir(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Dossier vide → 'Aucune session à analyser' sur stdout, exit 0."""
+    exit_code = main(["--path", str(tmp_path)])
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Aucune session" in captured.out

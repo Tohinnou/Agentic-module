@@ -1243,4 +1243,22 @@ Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses 
 
 ---
 
+## Phase 7.3 — CLI report + README observability
+
+### `src/sandbox/observability/report.py`
+
+**`main(argv: list[str] | None = None)` signature, PAS `sys.argv` en dur** : la fonction `main` accepte `argv` en paramètre optionnel, retombe sur `sys.argv` seulement dans le `if __name__ == "__main__"`. Alternative rejetée : `main()` qui lit directement `sys.argv`. Pourquoi ce shim : (1) **tests directs sans subprocess** — `test_main_returns_0_on_nominal_dir` fait `main(["--path", str(tmp_path)])` en 5 ms, alors qu'un `subprocess.run` prendrait ~200 ms de boot Python à chaque test ; (2) **exit code = valeur retour** — testable en 1 ligne (`assert exit_code == 0`), pas besoin de parser un `CompletedProcess` ; (3) **argparse déjà côté main** — le shim ne dévoie rien, argparse est appelé DANS main avec les argv qu'on lui donne. Pattern général : *tout CLI Python doit avoir un `main(argv)` interne, et le `if __name__ == "__main__"` juste comme wrapper. Testabilité gagnée en 3 lignes de shim, exécutions de test ×40 plus rapides*.
+
+**Exit codes 0/1/2 avec sémantique distincte, PAS juste 0/1 fourre-tout** : `0` = analyse OK sans drift high, `1` = analyse OK MAIS au moins une session high-severity, `2` = erreur d'entrée (path introuvable, argparse fail). Alternative rejetée : `0` = tout va bien, `1` = tout le reste. Pourquoi la distinction 1 vs 2 : (1) **`1` en CI/cron** signifie *"la commande a fonctionné mais tu dois regarder les résultats"* — un job qui remonte cet exit code peut trigger un ping Slack sans bruit ; (2) **`2`** signifie *"la commande a échoué, tu dois fixer l'appel"* — c'est différent, une alerte infra distincte peut la traiter ; (3) **la convention Unix** distingue déjà `1` (échec de la logique) de `>1` (erreur système/config). Pattern général : *un CLI production-friendly a au moins 3 exit codes distincts : succès, "attention utilisateur", "invocation cassée". Confondre les deux derniers = un ops qui reçoit une alerte "sévérité high détectée" là où il s'agit d'un typo de chemin, ou l'inverse*.
+
+**`analyze_directory` continue sur `ValueError` d'une session, PAS raise + arrêt** : si `detect_drift` lève `ValueError` sur une session (events vides, session_ids incohérents), on log sur stderr et on continue avec les autres sessions. Alternative rejetée : `raise` et sortir. Pourquoi le fail-soft agrégé : (1) **une session cassée n'invalide pas les autres** — si tu as 100 sessions et que la #37 est mal formée, tu veux quand même le report des 99 autres ; (2) **cohérent avec le reader.py** — même philosophie de "skip + warn" que sur les lignes JSONL corrompues (Phase 7.1) ; (3) **exit code séparable** — l'exit code de main() reste sur les VERDICTS des sessions valides, pas sur les erreurs d'input. Pattern général : *un outil d'analyse batch doit être fail-soft au niveau d'un ITEM (session, ligne, record) et fail-loud au niveau de l'INPUT global (path introuvable, argparse fail). Confondre les deux = un outil qui refuse d'analyser 1000 sessions à cause d'une seule ligne malformée*.
+
+---
+
+### `src/sandbox/observability/README.md`
+
+**Cohérence de pattern avec `policy_server/README.md`, PAS un README ad-hoc** : mêmes 5 sections dans le même ordre — Flux (diagramme ASCII), Public API, Modules internes, Étendre, Pièges. Alternative rejetée : réinventer la structure de doc parce que "c'est un module différent". Pourquoi la cohérence : (1) **charge cognitive humaine** — un dev qui a lu un README du sandbox sait où chercher dans le suivant ; (2) **contrat de complétude** — les 5 sections FORCE à documenter tous les aspects (impossible de "oublier" les pièges ou l'extension) ; (3) **anti-scope-creep** — les 5 sections plafonnent naturellement à ~150 lignes, au-delà c'est un signal que le module est trop gros. Pattern général : *les README de module d'un même projet doivent partager la même charpente. La cohérence de structure = discipline documentaire ; ne pas la maintenir = README ad-hoc dont chacun oublie des sections différentes*.
+
+---
+
 
