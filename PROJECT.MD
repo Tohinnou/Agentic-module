@@ -868,32 +868,52 @@ kaggle/
     guardrails                      ✅ 3 axes fail-closed (API, parsing, verdict enum)
     policy enforcement              ✅ orchestrator._call_tool wired
 
-  ### Phase 7 — Observabilité
+  ### Phase 7 — Observabilité ✅ (clôturée le 2026-07-12, commits `89ce15a..b6c3ebf`)
 
-    Objectif : tracer la trajectoire.
+    Objectif : détecter l'**Intent Drift** post-hoc sur les trajectoires JSONL déjà loguées.
 
-    Créer :
+    Note d'architecture : le logging trajectory (émission) vit dans `orchestrator.py` depuis Phase 4/6
+    (`TrajectoryEvent` + `_dump_jsonl`). Phase 7 ajoute par-dessus la couche d'**analyse** rule-based,
+    sans LLM, réversible, testable en microsecondes par session.
 
-    logs/agent_trajectory.jsonl
+    **Livré** (voir `src/sandbox/observability/README.md` pour l'onboarding module) :
 
-    Chaque action doit écrire :
+    Data / specs (contrats humains éditables) :
+    - meta/intent_drift_signals.md    ← 4 signaux + schémas DriftSignal / DriftReport, out-of-scope explicite
+    - evals/drift_cases.yaml          ← fixture 6 cas synthétiques (nominal + 5 drifts, precision/recall = 1.0)
 
-    {
-      "session_id": "s001",
-      "step": 1,
-      "agent": "support_agent",
-      "action": "retrieve_docs",
-      "input_summary": "question about cancellation",
-      "risk": "low",
-      "status": "success"
-    }
+    Code (Python) :
+    - src/sandbox/observability/__init__.py    ← DriftSignal, DriftReport frozen dataclasses, `detect_drift()`
+    - src/sandbox/observability/reader.py      ← load_trajectory_file/dir + group_by_session (tolérant JSONL corrompu)
+    - src/sandbox/observability/drift.py       ← 4 helpers `_detect_*` + `EXPECTED_SEQUENCES` par agent
+    - src/sandbox/observability/report.py      ← CLI human-facing (argparse, exit codes 0/1/2, testable via `main(argv)`)
 
-    Notions pratiquées :
+    Tests :
+    - tests/test_observability.py    ← 37 tests (fixtures, dataclass invariants, détecteurs parametrisés, reader tmp_path, CLI capsys)
 
-    Vibe Trajectory
-    observability
-    intent drift
-    audit trail
+    Doc :
+    - src/sandbox/observability/README.md      ← flux ASCII + Public API + procédure "ajouter un signal" + 5 pièges
+
+    **Non livré (out-of-scope Phase 7, différé — voir backlog ci-dessous)** :
+    - Dashboard visuel / formats JSON/CSV (mention dans README §Étendre)
+    - Cross-session Intent Drift (patterns qui traversent plusieurs sessions)
+    - Latency spike / cost drift signals — exclus explicitement dans `intent_drift_signals.md`
+    - Semantic verdict change detection (nécessiterait baseline embeddings)
+
+    **Backlog qui reste ouvert (à cadrer Phase 8+)** :
+    - Circuit breaker + cost/latency tracking (promesse §1 PROJECT.MD, jamais planifié dans une phase)
+    - Refusal gap sur questions low-relevance (BM25 < 0.15 documenté SKILL.md, jamais wire dans orchestrator)
+    - `meta/dependency_policy.md` (AgBOM) — dep Phase 8
+    - Mock path `LLM_PROVIDER` pour `evaluation/judge.py` (aujourd'hui appelle OpenRouter inconditionnellement)
+
+    Notions pratiquées et vérifiées :
+
+    Vibe Trajectory              ✅ reader tolérant + group_by_session
+    Intent Drift detection       ✅ 4 signaux rule-based, déterministe, µs par session
+    Observability post-hoc       ✅ CLI human-facing, exit codes CI/cron-friendly (0/1/2)
+    Audit trail                  ✅ warn+skip préserve la trace, jamais silencieux
+    Fail-soft item vs batch      ✅ pattern ancré via Concept #4 (`learning_notes.md`)
+    Additif > rétrospectif       ✅ scope figé à 4 signaux Phase 7.0, extension = data-first (voir README §Étendre)
 
   ### Phase 8 — Evals (Evaluation-Driven Development)
 

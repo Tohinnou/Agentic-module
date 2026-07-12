@@ -1279,4 +1279,75 @@ Tableau vérifiable — à relire pour savoir si la Phase 6 tient ses promesses 
 
 ---
 
+## Phase 7 — Retro (méta-leçons, pas WHY de code)
+
+Bloc de clôture. Contrairement aux sections 7.0-7.3 (WHY par fichier), celui-ci
+capte les leçons **transversales** que Phase 7 a démontrées ou re-démontrées.
+
+### 1. EDD a re-tenu, plus fort que Phase 6
+
+Sur Phase 6, l'EDD était embryonnaire — fixture adversariale écrite après le
+premier jet du semantic gate, tests parametrisés rajoutés en cours de route.
+Sur Phase 7, la discipline s'est appliquée cash : `meta/intent_drift_signals.md`
++ `evals/drift_cases.yaml` + tests parametrisés **avant** le code des 4 helpers.
+Effet observé : quand j'ai écrit `_detect_duplicate_action`, il n'y a eu **aucun
+aller-retour** entre implémentation et spec — le contrat était déjà signé côté
+data. Coût du data-first upfront : ~30 min ; économie estimée sur les 3 helpers
+suivants : ~1 h de va-et-vient évité. Le pattern gagne quand tu as ≥3 items
+similaires à implémenter.
+
+### 2. Purpose-first briefing enforced mid-phase, feedback persisté
+
+Le 2026-07-12, en plein milieu de Phase 7.3, tu as coupé net : *"À chaque étape
+il faut d'abord que tu me dise c'est quoi le but de faire cela et non de finir de
+coder et me poser les questions"*. Persisté immédiatement dans
+`feedback_purpose_first.md`. Appliqué le reste de la phase (7.3, clôture 7.4).
+Leçon meta : la boucle "code → quiz retro" quizze APRÈS que le train soit parti ;
+le briefing purpose-first met le checkpoint AVANT que le code existe. Le quiz
+Feynman reste — mais son rôle se resserre à *"est-ce que le concept a atterri ?"*,
+plus à *"aurait-on dû construire ça ?"*.
+
+### 3. Analogy-first a débloqué deux fois
+
+Deux blocages Feynman dans Phase 7 :
+- **Phase 7.0** : *"je suis perdu, je ne sais quoi répondre"* → analogie crêperie
+  (recette figée vs "on verra à l'usage") → tu as sorti *"additif vs
+  rétrospectif"* en une phrase.
+- **Phase 7.3** : *"j'y comprend rien"* → analogie réceptionniste hôtel (options
+  A/B/C : accepter faux ID / bloquer la file / skipper le client avec log) → tu
+  as verrouillé option C avec les 2 anti-arguments corrects.
+
+Pattern qui tient : quand la question technique bloque, remplacer les mots
+techniques par un scénario quotidien avec **plusieurs options concrètes**, et
+faire choisir. Le raisonnement de rejet des mauvaises options révèle si le concept
+est acquis mieux que la défense de la bonne option.
+
+### 4. "Additif vs rétrospectif" comme boussole d'ingénierie
+
+Décision Phase 7.0 : figer le scope à 4 signaux upfront, refuser d'ajouter "on
+verra à l'usage". Justification que tu as produite toi-même : *"cette rigidité
+est plus flexible car elle serait additif alors que si 'on verra à l'usage'
+serai rétrospectif"*. C'est plus qu'une décision locale — c'est une boussole
+transférable :
+- Phase 6 : `PolicyDecision` frozen dataclass (immutable = additif : nouveau champ
+  = nouveau field, pas de mutation en place).
+- Phase 7 : `EXPECTED_SEQUENCES` dict par agent (ajouter un agent = ajouter une
+  clé, pas de refactor de `_detect_unexpected_sequence`).
+- README §Étendre : documente la procédure d'ajout signal en 5 étapes (data →
+  fixture → code → wiring → test) — c'est l'incarnation opérationnelle du
+  *additif*.
+
+Le prix à payer : accepter d'écrire des specs *avant* de savoir si elles seront
+utilisées. C'est exactement le trade-off que Day 5 du cours nomme SDD (Spec is
+the source of truth).
+
+### 5. Cache warm : les 4 concepts à ré-ancrer sont ma prise de session Phase 8
+
+À l'ouverture de Phase 8, relire §Concepts à ré-ancrer (30 s). Les 4 concepts
+identifient exactement les endroits où mon intuition a dérivé et où le code
+canonique m'a corrigé. Ce n'est pas un backlog — c'est une prise de session
+qui compense le fait qu'entre 2 phases il peut y avoir plusieurs jours.
+
+---
+
 
