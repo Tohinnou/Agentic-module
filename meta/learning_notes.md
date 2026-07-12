@@ -58,6 +58,24 @@ Un dev copie-colle `SupportAgent` pour créer `ReportAgent` **sans changer** `AG
 
 **Défense** : tests de refus positif (asserter que `ReportAgent` échoue à appeler `draft_reply` alors que `SupportAgent` réussit) — ils attrapent les inversions d'identité que les tests "happy path" ne voient jamais.
 
+### 4. Item-scope vs batch-scope pour fail-soft (identifié 2026-07-12 après quiz Phase 7.3)
+
+Le pattern `try/except: continue + warn` (dans `analyze_directory` et `load_trajectory_file`) n'est PAS du swallow abusif — **si et seulement si** deux conditions sont réunies :
+
+| Condition | Sans elle → |
+|---|---|
+| **Portée de l'erreur < portée de l'opération** (item-level dans un batch-level) | Skipper une session pendant qu'un `FileNotFoundError` dossier bubble n'a aucun sens : les 99 autres échoueront pareil. Il faut fail-fast. |
+| **Trace d'audit préservée** (`print(..., file=sys.stderr)`) | `except ValueError: pass` = vrai swallow, l'opérateur ne saura jamais que 37 sessions ont été perdues. Loggé ≠ silencieux. |
+
+**Règle de reconnaissance** : *skip acceptable ssi la cause est isolée à l'item ET la trace est préservée*.
+
+**Cas où le pattern ne tient plus** :
+- **Cause globale** : `FileNotFoundError` sur le dossier lui-même, `PermissionError`, `ConnectionError` DB → skipper ne guérit rien, bubble.
+- **Pas de batch** : traitement single-item → pas d'"autres" à sauver, skip = juste avaler.
+- **État partagé corrompu** : partial write laisse un lock/verrou → skip laisse la mine pour l'item suivant.
+
+**Piège récurrent** (attrapé Phase 7.1 puis Phase 7.3) : défendre le pattern par "c'est acceptable en sandbox" — c'est un argument de **volumétrie de log**, pas de **structure d'erreur**. Le vrai argument est structurel : *scope + audit*.
+
 ---
 
 ## Phase 1 — Mise en place du projet
