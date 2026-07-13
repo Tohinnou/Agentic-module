@@ -1512,4 +1512,47 @@ les tests LLM existants skippaient sans clé → aucun ne route vers le réseau 
 Gain concret : le juge tourne désormais offline (+10 tests verts là où ils skippaient).
 Suite 173 passed / 6 xfailed, ruff clean.
 
+## Phase 8.3 — Module #2 : judge_prompts.md + harness pass^k
+
+### WHY module #2 ≠ "construire le juge"
+
+Le juge (`judge.py`) + un golden de calibration SOIGNÉ (`judge_golden.yaml` :
+buckets pass/fail/borderline, scores encodant l'intention, tolérance ±1)
+existaient déjà, mais ne tournaient qu'avec une clé (tier réseau). Module #2 livre
+les 2 pièces que 8.3 devait encore : (a) `judge_prompts.md`, (b) le harness pass^k.
+
+### WHY judge_prompts.md doc-only (décision A, pas SDD-source)
+
+Le prompt se cachait en constante inline (`SYSTEM_PROMPT`). `judge_prompts.md` le
+documente pour un humain. Choix **A** (miroir, PAS chargé au runtime) plutôt que
+source-of-truth (judge.py charge le `.md`) : dans un sandbox, l'indirection I/O +
+les implications cache/versioning ne paient pas ; `PROMPT_VERSION` + AgBOM gardent
+déjà la dérive. Discipline : modifier le prompt runtime → refléter ici + bump.
+
+### WHY pass^k générique + le truc deux-tiers
+
+pass^k = un cas passe ssi il réussit les k runs **indépendants**. Il démasque la
+flakiness qu'un run unique (pass^1) masque — un juge correct 2 fois sur 3 n'est pas
+fiable. Le harness (`passes_k`/`passk_rate`) ignore juge ET réseau : on lui passe
+`run_once(case) -> bool`. C'est ce qui le rend testable OFFLINE avec des stand-ins
+(déterministe → 1.0 ; flaky → 0.75 < 0.85 : preuve qu'il DISCRIMINE). Le pass^k
+réel sur le juge LLM reste tier-2. Réponse à la question de contrôle : le mock ne
+peut pas juger si le juge est *bon* — donc on teste la plomberie du pass^k offline,
+le discernement en opt-in.
+
+### WHY use_cache=False dans le pass^k réel (piège subtil)
+
+Le cache juge est keyé sur (model, prompt_version, payload) — SANS le n° de run. Si
+le pass^k réel utilisait le cache, les runs 2..k taperaient le cache → sortie
+trivialement identique → pass^k = 1.0 **factice** qui masque exactement la
+flakiness qu'on veut mesurer. Donc `use_cache=False` : k appels frais obligatoires.
+
+### WHY pass^k réel en opt-in (RUN_LLM_PASSK), pas juste skipif-clé
+
+Contrairement à la calibration (instantanée via cache), le pass^k réel force k
+appels frais (~18 appels, ~1 min, coût). Le gater sur la simple présence d'une clé
+le ferait tourner à CHAQUE `pytest` (taxe + $). Opt-in explicite = on le lance quand
+on VEUT vérifier la stabilité du juge, pas à chaque commit. Mesuré une fois cette
+session : juge **stable**, pass^3 ≥ 0.85 réel sur `judge_golden`.
+
 
