@@ -1,7 +1,7 @@
 # Golden Dataset — comportement déterministe du SupportAgent (Phase 8.1)
 #
 # Contrat : voir meta/golden_dataset_spec.md. Runner : tests/test_golden.py.
-# Chaque cas = un bloc BDD Gherkin (scenario/given/when/then), additif-by-append.
+# Chaque cas = un bloc BDD (Behavior-Driven Development) Gherkin (scenario/given/when/then), additif-by-append.
 #
 # `policy_doc_id` encode l'INTENTION (le doc sémantiquement correct), PAS la sortie
 # observée. `retrieval_status: gap` = BM25 top-1 ne satisfait pas encore l'intention

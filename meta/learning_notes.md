@@ -78,6 +78,30 @@ Le pattern `try/except: continue + warn` (dans `analyze_directory` et `load_traj
 
 ---
 
+### 5. Golden = comportement VOULU, pas OBSERVÉ — le golden comme instrument de diagnostic (identifié 2026-07-13, Phase 8.1)
+
+Un cas golden encode l'**intention** (le comportement dérivé des règles / de la policy), **pas** la sortie observée de l'agent.
+
+| Type de champ | Comment fixer l'attendu | Si divergence au run |
+|---|---|---|
+| **Dérivable** (category/priority ← règles keyword transparentes) | calculé à la main, *connaissable* sans lancer l'agent | soit mon calcul est faux, soit vrai bug de règle |
+| **Empirique** (policy_doc_id ← BM25 top-1) | j'écris le doc *sémantiquement correct*, PUIS je lance | **c'est un FINDING**, jamais ré-encoder la sortie en douce |
+
+**Règle de reconnaissance** : *bénir la sortie observée comme "golden" = characterization = geler un bug au vert*. On perd exactement ce que le 80% Problem veut exposer.
+
+**Le corollaire puissant** : parce que le golden = intention, un cas rouge est une **question** ("pourquoi la réalité diffère de l'intention ?"), et la réponse **classe** le finding. Phase 8.1 : "retrieval cassé" n'était pas UN bug — le golden l'a décomposé en 3 causes racines distinctes :
+- **ranking** (verbe requête `annuler` ≠ nom doc `annulation`, BM25 exact-token sans stemming) → *fixable* (stemming).
+- **corpus-coverage** (le vocabulaire de la requête est absent du bon doc : `moteur`/`pluie`/`secours` n'y sont pas) → enrichir le corpus, *pas* le ranking.
+- **refusal** (query hors-corpus : horaires) → seuil de refus min-score, *pas* le ranking.
+
+Un seul fix (stemming) n'a fermé qu'**1 des 7** gaps — les 6 autres n'étaient pas des bugs de ranking. Sans le golden-instrument, on aurait "tuné BM25" à l'aveugle sur des cas qu'aucun tuning de ranking ne touche.
+
+**Incarnation opérationnelle** : `xfail(strict=True)` sur les gaps. Le golden encode l'intention et marque les gaps connus xfail. Un fix qui ferme un gap → le cas passe **XPASS** → `strict` le transforme en **échec** → force le flip `gap→confirmed`. Scoreboard auto-nettoyant : le test te dit *quel* cas ton fix a réparé (c'est arrivé cash sur `cancel-refund-normal`).
+
+Prolonge le Concept #3 (additif-by-append : chaque cas golden = un contrat signé, jamais réécrit) et le pattern `eval_as_unit_test`.
+
+---
+
 ## Phase 1 — Mise en place du projet
 
 ### `src/sandbox/api.py`
@@ -1343,10 +1367,82 @@ the source of truth).
 
 ### 5. Cache warm : les 4 concepts à ré-ancrer sont ma prise de session Phase 8
 
-À l'ouverture de Phase 8, relire §Concepts à ré-ancrer (30 s). Les 4 concepts
+À l'ouverture de Phase 8, relire §Concepts à ré-ancrer (30 s). Les concepts
 identifient exactement les endroits où mon intuition a dérivé et où le code
 canonique m'a corrigé. Ce n'est pas un backlog — c'est une prise de session
 qui compense le fait qu'entre 2 phases il peut y avoir plusieurs jours.
+
+---
+
+## Phase 8.1 — Golden Dataset + fix retrieval (stemming)
+
+Commits `eeaacf7` (golden artifact) puis `de529db` (fix stemming). Plan hybride
+validé : golden d'abord (commit), fix ensuite (commit séparé, Rule 9).
+
+### `meta/golden_dataset_spec.md` — le contrat AVANT la fixture
+
+WHY un spec avant le YAML : même SDD que Phase 7 (`intent_drift_signals.md` avant
+`drift_cases.yaml`). Le spec fige la **ligne de partage déterministe/probabiliste** :
+5 champs golden-assertables (category, priority, policy_doc_id, placeholders_nonempty)
+vs le reste délégué (qualité du draft → judge 8.3 ; gouvernance → evals P6). Décision
+corrigée en cours : `tone` retiré des assertions car **non exposé** sur `SupportResponse`
+(il vit dans `DraftReplyOutput`, déjà unit-testé) — un golden n'assert que la sortie
+*observable* de `run()`. Voir Concept #5 pour le principe intention-vs-characterization.
+
+### `evals/golden.yaml` — 10 cas BDD, prédits à la main puis vérifiés
+
+WHY prédire avant d'observer : discipline anti-characterization. J'ai figé
+category/priority/doc-voulu des 10 requêtes *avant* de lancer le probe. Résultat du
+run : couche déterministe **10/10** (mes dérivations keyword exactes), retrieval BM25
+top-1 **3/10** seulement. Le golden a fait son job dès le premier run — 80% Problem
+rendu chair : l'agent classe parfaitement puis cite la mauvaise policy 7 fois sur 10.
+
+### `tests/test_golden.py` — 2 fonctions, 2 vérités
+
+WHY séparer `test_golden_behavior` (déterministe, 10/10 vert) de `test_golden_retrieval`
+(empirique, 3 vert + 7 xfail-strict) : si j'assertais tout dans une fonction, l'xfail
+d'un gap masquerait les assertions category/priority correctes du même cas. Deux
+fonctions = "classification parfaite" et "retrieval cassé" restent lisibles séparément.
+Runner `enforce_policy=False, evaluate=False` : isole le comportement de la gouvernance
+(testée P6) et évite l'appel LLM juge → 100% offline déterministe.
+
+### `src/sandbox/retrieval/bm25.py` — stemming isolé
+
+WHY isolé à BM25 et pas dans `tokenize()` : `tokenize` est un **choke point partagé**
+avec le classifier (`classification/rules.py` l'importe pour matcher `CATEGORY_KEYWORDS`
+non stemmés). Stemmer là aurait cassé le keyword-matching. Leçon transférable : *ne pas
+modifier une fonction-carrefour utilisée par deux consommateurs aux besoins opposés —
+ajouter la transfo côté consommateur qui la veut*. Le stemmer est appliqué
+**symétriquement** index+query (sinon les deux côtés ne se retrouveraient jamais) et fait
+2 passes (pluriel puis suffixe) pour faire converger `orage`/`orages`.
+
+### La leçon-or : le golden est un instrument de diagnostic
+
+WHY c'est le pic de la phase : "retrieval cassé" s'est décomposé en 3 causes racines
+(ranking / corpus-coverage / refusal), et le stemming n'en adresse qu'**une** (1 gap
+fermé sur 7). Le golden ne dit pas juste pass/fail — il *localise* la cause. Détail
+complet dans Concept #5. Backlog ouvert (6 gaps) : enrichir le corpus (weather/equipment/
+safety), acter un doc `damage` ou le replier sur equipment, seuil de refus min-score,
+schéma `acceptable_docs` pour les requêtes multi-intention (cancel-high).
+
+### pass^k — garde de déterminisme, pas encore de dents
+
+WHY `test_golden_passk_determinism` est trivialement vert : sur un pipeline offline sans
+aléa, pass^k = 1.0 par construction. Il sert de **garde** (si ça flanche, un set/dict/
+horloge a fui). Les vraies dents de pass^k arrivent en 8.3 (juge LLM probabiliste, cible
+`pass^3 ≥ 0.85`). Piège corrigé du quiz Phase 7 : pass^k = *même input × k runs × seed
+identique*, PAS "moyenne sur k reformulations".
+
+### Feynman 8.1 — la décomposition a eu besoin d'une analogie
+
+Q2 (« pourquoi 1 seul fix ferme 1/7 gaps ? ») a glissé au 1er passage : ramenée à
+« le stemming n'a pas assez marché » (mental model : UN problème de force variable).
+Débloquée par l'analogie **restaurant** — 1 plainte = le chef (ranking/stemming) ;
+4 = des plats pas au menu (corpus-coverage : le mot absent de tout doc) ; 1 = un client
+dans le mauvais restaurant (refusal : query hors-corpus). Après l'analogie, la
+décomposition a atterri. Analogy-first re-confirmé (cf. Phase 7 Retro §3). Q1
+(intention vs characterization) tenait en surface ; Q3 (strict-xfail) était neuf →
+analogie du panneau « HORS SERVICE » qui ment quand la machine est réparée.
 
 ---
 
