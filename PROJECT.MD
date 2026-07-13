@@ -919,6 +919,22 @@ kaggle/
 
     Objectif : appliquer les 5 patterns d'évaluation du cours.
 
+    ─────────────────────────────────────────────────────────────────
+    ÉTAT & SÉQUENÇAGE (révisé 2026-07-13) — voir meta/learning_notes.md
+    ─────────────────────────────────────────────────────────────────
+    - 8.1 ✅ golden.yaml (couche DÉTERMINISTE : category/priority/policy_doc_id).
+      A exposé retrieval BM25 top-1 3/10 → 4/10 (stemming), 6 gaps xfail-strict.
+    - 8.2 FUSIONNÉE DANS 8.3 (décision 2026-07-13). Raison : `adversarial.yaml`
+      (refus d'injection) ET la trigger accuracy sont des JUGEMENTS SÉMANTIQUES
+      (refus piloté par le Semantic Gate LLM ; aucun routeur code ne lit les
+      `description` des SKILL.md — le dispatch est conceptuel). Ce ne sont PAS
+      des assertions vrai/faux déterministes → ils appartiennent à la couche
+      probabiliste, pas à un jumeau déterministe du golden.
+    - Séquence réordonnée de la couche probabiliste :
+        (1) mock LLM_PROVIDER      — débloque les 3 évals sémantiques d'un coup
+        (2) LLM-as-judge           — judge_prompts.md + chemin mock + pass^k réel
+        (3) adversarial + trigger  — réécrits ENSEMBLE par-dessus le judge
+
     À faire :
 
     1. evals/golden.yaml         — 20-50 cas en BDD Gherkin (Scenario / Given / When / Then)
