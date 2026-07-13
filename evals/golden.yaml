@@ -7,12 +7,13 @@
 # observée. `retrieval_status: gap` = BM25 top-1 ne satisfait pas encore l'intention
 # → le runner marque ce cas xfail(strict). C'est un bug tracké, pas un échec du dataset.
 #
-# Bilan run initial (2026-07-13) : classif/priorité 10/10 ✅ · retrieval top-1 3/10.
-# Faux-attracteur systématique = weather_policy. Cause : corpus à vocabulaire transversal
-# + BM25 sans stemming (verbe requête ≠ nom du doc). Fix retrieval = chantier séparé.
+# Bilan run initial (2026-07-13) : classif/priorité 10/10 · retrieval top-1 3/10.
+# MàJ post-stemming (Phase 8.1) : retrieval top-1 4/10 (cancel-normal fixé). Les 6 gaps
+# restants se décomposent en 3 causes distinctes — le golden est devenu un instrument
+# de diagnostic : 1 ambiguïté multi-intention · 4 corpus-coverage · 1 refusal.
 
 meta:
-  version: "0.1.0"
+  version: "0.2.0"
   runner:
     instantiation: "SupportAgent(enforce_policy=False, evaluate=False, session_id=<id>)"
     enforce_policy: false   # gouvernance testée ailleurs (Phase 6)
@@ -23,7 +24,7 @@ meta:
   priorities: [urgent, high, normal, low]
 
 cases:
-  # ---- Couche déterministe OK + retrieval OK (cas robustes, query surface-match le bon doc) ----
+  # ---- Couche déterministe OK + retrieval OK ----
   - id: payment-double-charge
     scenario: "Double prélèvement carte → payment/normal, cite payment_policy"
     given: "un client signale une carte prélevée deux fois pour la même facture"
@@ -48,7 +49,7 @@ cases:
       policy_doc_id: booking_rules
       placeholders_nonempty: true
     retrieval_status: confirmed
-    notes: "'disponibilités'+'réservation' → booking_rules (3.68). Robuste."
+    notes: "'disponibilités'+'réservation' → booking_rules (5.66 post-stemming). Robuste."
 
   - id: weather-storm-urgent
     scenario: "Alerte tempête → weather/urgent, cite weather_policy"
@@ -61,11 +62,10 @@ cases:
       policy_doc_id: weather_policy
       placeholders_nonempty: true
     retrieval_status: confirmed
-    notes: "4 tokens météo discriminants (orage/tempête/alerte/météo) → weather_policy (5.43). Meilleur signal du dataset. URGENCY_KEYWORDS (tempête, alerte) → priority urgent."
+    notes: "4 tokens météo discriminants → weather_policy (7.40 post-stemming). Meilleur signal. URGENCY_KEYWORDS (tempête, alerte) → priority urgent."
 
-  # ---- Couche déterministe OK mais retrieval GAP (xfail sur policy_doc_id) ----
   - id: cancel-refund-normal
-    scenario: "Annulation sans urgence → cancellation/normal, DOIT citer cancellation_policy"
+    scenario: "Annulation sans urgence → cancellation/normal, cite cancellation_policy"
     given: "un client veut annuler et demande un remboursement, sans échéance"
     when:
       question: "Je veux annuler, comment obtenir un remboursement ?"
@@ -74,14 +74,13 @@ cases:
       priority: normal
       policy_doc_id: cancellation_policy
       placeholders_nonempty: true
-    retrieval_status: gap
-    observed_doc: weather_policy
+    retrieval_status: confirmed
     notes: >-
-      FINDING: BM25 classe weather_policy (2.06) > cancellation_policy (1.97). Les deux
-      docs contiennent 'annuler'+'remboursement' (tf=1) ; weather légèrement plus court
-      tranche. La requête n'a aucun token DISCRIMINANT de cancellation_policy (verbe
-      'annuler' ≠ nom 'annulation' du doc, pas de stemming).
+      FIXÉ (Phase 8.1 stemming) — cas ① ranking résolu. 'annuler'→'annul' matche désormais
+      'annulation'×5 du doc → cancellation_policy (2.25) > weather_policy (2.21). Avant le
+      stemming, weather gagnait (2.06 vs 1.97) faute de match verbe→nom.
 
+  # ---- Couche déterministe OK mais retrieval GAP (xfail sur policy_doc_id) ----
   - id: cancel-tomorrow-high
     scenario: "Annulation avec pression temporelle → cancellation/high, DOIT citer cancellation_policy"
     given: "un client doit annuler sa sortie de demain et demande un remboursement"
@@ -95,9 +94,12 @@ cases:
     retrieval_status: gap
     observed_doc: refund_policy
     notes: >-
-      FINDING (défendable): 'demain' ∈ TIME_PRESSURE → priority high. BM25 renvoie
-      refund_policy (3.24) car 'remboursement' y est dense (5 occurrences) ; cancellation_policy
-      3e (2.00). Le doc canonique de l'ANNULATION reste cancellation_policy.
+      GAP défendable (ambiguïté multi-intention). 'demain' ∈ TIME_PRESSURE → priority high.
+      Le stemming N'A PAS suffi : refund_policy (4.21) domine car 'rembours'×5 y écrase
+      'annul'×1 ; cancellation_policy 2e (2.27). refund_policy répond littéralement à
+      "remboursement possible ?" — défendable. Intent gardé = cancellation_policy (doc
+      canonique de l'annulation) ; expose la limite d'une assertion single-doc sur requête
+      multi-intention (backlog : schéma acceptable_docs ?).
 
   - id: weather-light-normal
     scenario: "Météo sans danger → weather/normal, DOIT citer weather_policy"
@@ -112,9 +114,10 @@ cases:
     retrieval_status: gap
     observed_doc: safety_rules
     notes: >-
-      FINDING: 'pluie'/'houle' peu présents dans weather_policy → BM25 renvoie safety_rules
-      (2.30), weather_policy absent du top-3. Query météo → doc sécurité. Aucun mot d'urgence
-      → priority normal (contraste avec weather-storm-urgent).
+      GAP corpus-coverage (CONFIRMÉ post-stemming). 'pluie'/'houle' ABSENTS de weather_policy
+      (il liste orages/vents/visibilité/alerte). BM25 renvoie safety_rules (2.30), weather
+      absent du top-3. Le stemming ne crée pas de vocabulaire manquant. Aucun mot d'urgence →
+      priority normal. Backlog : enrichir weather_policy (pluie, houle, vagues).
 
   - id: equipment-engine-failure
     scenario: "Panne moteur → equipment/normal, DOIT citer equipment_policy"
@@ -129,9 +132,10 @@ cases:
     retrieval_status: gap
     observed_doc: weather_policy
     notes: >-
-      FINDING sévère: classif matche 4 tokens equipment (moteur/bateau/panne/défaut) MAIS
-      BM25 renvoie weather_policy (3.87), equipment_policy absent du top-3. Divergence brutale
-      classif↔retrieval : l'agent identifie la catégorie puis cite un doc hors-sujet.
+      GAP corpus-coverage. 'moteur'/'panne'/'défaut' ABSENTS d'equipment_policy (qui parle de
+      kayaks/paddles/dommage/réparation). BM25 renvoie toujours weather_policy (3.87), MAIS le
+      stemming (bateau↔bateaux) a fait remonter equipment_policy en 3e (3.10, absent du top-3
+      avant). Classif matche 4 tokens equipment pourtant. Backlog : vocabulaire de panne.
 
   - id: safety-person-overboard
     scenario: "Personne à l'eau → safety/urgent, DOIT citer safety_rules"
@@ -146,10 +150,10 @@ cases:
     retrieval_status: gap
     observed_doc: support_guidelines
     notes: >-
-      FINDING: 'secours' seul token matché ; safety_rules absent du top-3. BM25 renvoie
-      support_guidelines (1.96) qui mentionne 'incidents de sécurité'. Le vocabulaire
-      d'urgence concret (tombée/eau/secours) n'est pas dans safety_rules sous ces formes.
-      category safety → priority urgent (règle fixe).
+      GAP corpus-coverage. 'secours'/'tombée'/'eau' ABSENTS de safety_rules (qui parle de
+      gilets/enfants/alcool/zones de navigation). BM25 renvoie support_guidelines (1.96).
+      category safety → priority urgent (règle fixe). Backlog : safety_rules ne couvre pas
+      l'urgence/secours/homme à la mer.
 
   - id: damage-collision
     scenario: "Collision et coque fissurée → damage/urgent ; corpus SANS doc dédié"
@@ -164,9 +168,11 @@ cases:
     retrieval_status: gap
     observed_doc: privacy_policy
     notes: >-
-      DOUBLE FINDING: (a) LACUNE CORPUS — aucune policy dédiée aux dommages (10 docs, zéro
+      DOUBLE GAP : (a) LACUNE CORPUS — aucune policy dédiée aux dommages (10 docs, zéro
       'damage_policy'). Intention repliée sur equipment_policy (dommage matériel). (b) BM25
-      renvoie privacy_policy (2.44) — absurde. 'accident'/'collision' ∈ URGENCY → priority urgent.
+      renvoie privacy_policy (2.44), equipment_policy 2e très proche (2.42, remonté via
+      stemming). 'accident'/'collision' ∈ URGENCY → priority urgent. Backlog : créer
+      damage_policy OU acter equipment_policy comme home des dommages.
 
   - id: other-opening-hours
     scenario: "Question hors-corpus (horaires) → other/low ; refusal-gap"
@@ -179,8 +185,9 @@ cases:
       policy_doc_id: support_guidelines
       placeholders_nonempty: true
     retrieval_status: gap
-    observed_doc: equipment_policy
+    observed_doc: booking_rules
     notes: >-
-      FINDING = refusal-gap: aucun mot-clé matché → other/low. Query hors-corpus (horaires).
-      BM25 renvoie equipment_policy à score très bas (1.32). Sous ce seuil l'agent DEVRAIT
-      refuser/escalader plutôt que citer un doc au hasard (cf. backlog BM25 < 0.15, SKILL.md).
+      GAP refusal (pas du ranking). Aucun mot-clé matché → other/low. Query hors-corpus
+      (horaires). Post-stemming BM25 renvoie booking_rules (2.91, score bas) au lieu
+      d'equipment_policy avant : le doc renvoyé change mais reste hors-sujet. Le vrai fix
+      est un SEUIL DE REFUS min-score (backlog BM25 < seuil → escalade), pas du ranking.
