@@ -1,20 +1,21 @@
-"""LLM-as-judge : note un draft sur 7 dimensions via OpenRouter, cache fichier."""
+"""LLM-as-judge : note un draft sur 7 dimensions.
+
+L'appel LLM passe par l'abstraction `sandbox.llm` : provider MOCK (offline,
+déterministe) par défaut, OpenRouter (réseau, coût réel) en opt-in via
+LLM_PROVIDER=openrouter. Le cache fichier n'amortit QUE le provider réseau —
+le mock est instant et ne pollue jamais data/judge_cache.json (deux-tiers).
+"""
 
 import hashlib
 import json
-import os
 from pathlib import Path
 
-import httpx
-from dotenv import load_dotenv
-
-load_dotenv()  # charge OPENROUTER_API_KEY depuis .env
+from sandbox.llm import LLMProvider, MockLLMProvider, get_provider
 
   # --- Constantes pinned (AgBOM + invalidation cache) ---
 MODEL = "anthropic/claude-haiku-4.5"
 PROMPT_VERSION = "v2"
 CACHE_PATH = Path("data/judge_cache.json")
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DIMENSIONS = [
   "clarte", "exactitude", "ton", "securite",
@@ -80,7 +81,7 @@ SYSTEM_PROMPT = """Tu es un juge qualité pour les réponses du support Marina R
     "concision": <int 0-5>,
     "pertinence": <int 0-5>
   }"""
-  
+
 # --- Cache fichier ---
 def _cache_key(payload: dict) -> str:
       """Hash stable de (model, prompt_version, payload). Tout changement invalide la clé."""
@@ -104,56 +105,48 @@ def _save_cache(cache: dict) -> None:
           json.dumps(cache, indent=2, ensure_ascii=False),
           encoding="utf-8",
       )
-      
-def _call_openrouter(user_message: str) -> str:
-      api_key = os.environ["OPENROUTER_API_KEY"]
-      response = httpx.post(
-          OPENROUTER_URL,
-          headers={
-              "Authorization": f"Bearer {api_key}",
-              "Content-Type": "application/json",
-          },
-          json={
-              "model": MODEL,
-              "messages": [
-                  {"role": "system", "content": SYSTEM_PROMPT},
-                  {"role": "user", "content": user_message},
-              ],
-              "temperature": 0,
-          },
-          timeout=30.0,
-      )
-      response.raise_for_status()
-      return response.json()["choices"][0]["message"]["content"]
-    
+
 def judge_answer(
-      customer_request: str,
-      category: str,
-      cited_policy_excerpt: str,
-      draft_reply: str,
-      use_cache: bool = True,
-  ) -> dict:
-    """Note un draft sur 7 dimensions. Retourne {reasoning: str, <7 dims>: int 0-5}."""
+    customer_request: str,
+    category: str,
+    cited_policy_excerpt: str,
+    draft_reply: str,
+    use_cache: bool = True,
+    provider: LLMProvider | None = None,
+) -> dict:
+    """Note un draft sur 7 dimensions. Retourne {reasoning: str, <7 dims>: int 0-5}.
+
+    provider=None → get_provider() (défaut mock offline ; réseau si
+    LLM_PROVIDER=openrouter). Le cache fichier est BYPASSÉ pour le mock :
+    déterministe et instant, et on garde data/judge_cache.json pur (uniquement
+    des verdicts réseau réels).
+    """
+    llm = provider or get_provider()
     payload = {
-          "customer_request": customer_request,
-          "category": category,
-          "cited_policy_excerpt": cited_policy_excerpt,
-          "draft_reply": draft_reply,
+        "customer_request": customer_request,
+        "category": category,
+        "cited_policy_excerpt": cited_policy_excerpt,
+        "draft_reply": draft_reply,
     }
 
-    cache = _load_cache() if use_cache else {}
-    key = _cache_key(payload)
-    if key in cache:
-      return cache[key]
+    # Le mock ne passe jamais par le cache : inutile (instant) et ça éviterait
+    # de polluer le cache réseau avec des scores non sémantiques.
+    cacheable = use_cache and not isinstance(llm, MockLLMProvider)
+    if cacheable:
+        cache = _load_cache()
+        key = _cache_key(payload)
+        if key in cache:
+            return cache[key]
 
     user_message = json.dumps(payload, ensure_ascii=False, indent=2)
-    raw = _call_openrouter(user_message)
+    raw = llm.complete(SYSTEM_PROMPT, user_message)
     scores = _extract_json(raw)
 
-    cache[key] = scores
-    _save_cache(cache)
+    if cacheable:
+        cache[key] = scores
+        _save_cache(cache)
     return scores
-  
+
 def _extract_json(raw: str) -> dict:
       """Parse JSON LLM-tolérant : strip code fences, fallback first-{ last-}."""
       text = raw.strip()
@@ -171,5 +164,5 @@ def _extract_json(raw: str) -> dict:
           if start == -1 or end == -1:
               raise ValueError(
                   f"Pas de JSON dans la réponse LLM. Brut :\n{raw[:500]}"
-              )
+              ) from None
           return json.loads(text[start:end + 1])

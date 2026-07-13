@@ -5,16 +5,15 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from pydantic import ValidationError
 
+from sandbox.evaluation.judge import DIMENSIONS, judge_answer
+from sandbox.llm import MockLLMProvider, OpenRouterProvider
 from sandbox.tools.evaluate_answer import (
     TOOL_METADATA,
     EvaluateAnswerInput,
     evaluate_answer,
 )
-
-from sandbox.evaluation.judge import DIMENSIONS, judge_answer
 
 GOLDEN_PATH = Path("evals/judge_golden.yaml")
 
@@ -46,6 +45,7 @@ def test_judge_calibration(inputs, expected_scores, tolerance):
           category=inputs["category"],
           cited_policy_excerpt=inputs["cited_policy_excerpt"],
           draft_reply=inputs["draft_reply"],
+          provider=OpenRouterProvider(),  # tier réseau : la calibration teste le VRAI juge
       )
 
       # Vérif structurelle : toutes les dims présentes
@@ -67,7 +67,29 @@ def test_judge_calibration(inputs, expected_scores, tolerance):
           )
           + f"\n  Reasoning du juge: {actual.get('reasoning', '<absent>')}"
       )
-      
+
+def test_judge_answer_mock_offline_deterministic():
+      """Le provider mock rend judge_answer rejouable offline + déterministe.
+
+      C'est le gain concret du module #1 : cette assertion tourne SANS clé API
+      (là où test_judge_calibration skippe). Garde pass^k au niveau unitaire.
+      """
+      kwargs = dict(
+          customer_request="Je veux annuler ma réservation.",
+          category="cancellation",
+          cited_policy_excerpt="Annulation gratuite avant 48h.",
+          draft_reply="Bonjour [[CUSTOMER_NAME]], votre annulation est confirmée.",
+      )
+      mock = MockLLMProvider()
+      first = judge_answer(**kwargs, provider=mock)
+      second = judge_answer(**kwargs, provider=mock)
+
+      for dim in DIMENSIONS:
+          assert isinstance(first[dim], int) and 0 <= first[dim] <= 5
+      assert "reasoning" in first
+      assert first == second  # déterminisme : pass^k = 1.0 par construction
+
+
 def test_pydantic_rejects_empty_customer_request():
       with pytest.raises(ValidationError):
           EvaluateAnswerInput(
