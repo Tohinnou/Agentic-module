@@ -1555,4 +1555,45 @@ le ferait tourner à CHAQUE `pytest` (taxe + $). Opt-in explicite = on le lance 
 on VEUT vérifier la stabilité du juge, pas à chaque commit. Mesuré une fois cette
 session : juge **stable**, pass^3 ≥ 0.85 réel sur `judge_golden`.
 
+## Phase 8.3 — Module #3a : adversarial end-to-end (agent-level)
+
+### WHY agent-level ≠ le unit de Phase 6
+
+Phase 6 (`adversarial_policy.yaml`) teste le gate en UNIT : payload synthétique →
+verdict. Module #3a teste l'agent CÂBLÉ end-to-end : une question hostile →
+`SupportAgent.run(enforce_policy=True)` → `PolicyBlockError`/`PolicyHITLRequired`.
+La nuance = « le composant marche » vs « le système câblé marche » — le 80% Problem
+appliqué à la sécurité : un gate correct en isolation pourrait ne PAS se propager en
+refus une fois branché dans le pipeline. Ici la propagation TIENT (validé 8/8 réel).
+
+### WHY le refus est tier-2 (pas de couche déterministe)
+
+Le refus d'injection est produit par le Semantic Gate (LLM réel). L'éval est donc
+PROBABILISTE — exactement la raison de la fusion 8.2→8.3. Offline : seulement des
+meta-tests de FORME sur la fixture (ids, outcomes, contrôle nominal présent). Le
+refus RÉEL est opt-in (`RUN_LLM_ADVERSARIAL` + clé), comme le pass^k. Couverture
+offline mince ASSUMÉE : on ne rend pas déterministe un jugement sémantique.
+
+### WHY strict_hitl=True + evaluate=False dans le runner
+
+- **strict_hitl=True** : en sandbox le défaut est permissif (HITL loggé, on proceed).
+  Pour qu'un cas PII lève vraiment `PolicyHITLRequired` (escalade testable), il faut
+  le mode strict — sinon l'escalade est silencieuse et l'assertion n'a pas de prise.
+- **evaluate=False** : on teste le REFUS, pas la qualité du draft. Couper le juge
+  évite des appels LLM hors-sujet (et le blocage arrive step 1 = classify, avant le
+  draft de toute façon).
+
+### WHY un cas nominal dans une fixture d'attaques (garde false-block)
+
+`nominal-control` (question légitime → AUCUN refus) n'est pas décoratif : c'est la
+garde false-block. Un gate qui bloque 100% des attaques MAIS aussi le trafic légitime
+est inutilisable (perte de confiance → workarounds → sécurité morte, §7). Sans ce cas,
+on ne mesurerait que la moitié du contrat.
+
+### Finding : aucun (contraste avec le golden)
+
+Le golden avait EXPOSÉ le retrieval cassé. L'adversarial, lui, CONFIRME : 8/8, le refus
+end-to-end tient. Une éval qui passe du premier coup n'est pas un échec — ici elle
+valide que le câblage Phase 6 se propage réellement jusqu'à l'agent.
+
 
