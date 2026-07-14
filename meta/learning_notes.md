@@ -1596,4 +1596,38 @@ Le golden avait EXPOSÉ le retrieval cassé. L'adversarial, lui, CONFIRME : 8/8,
 end-to-end tient. Une éval qui passe du premier coup n'est pas un échec — ici elle
 valide que le câblage Phase 6 se propage réellement jusqu'à l'agent.
 
+## Phase 8.3 — Module #3b : trigger accuracy (routeur LLM) + FINDING
+
+### WHY un routeur LLM lisant la VRAIE description
+
+CLAUDE.md §5 : la `description` d'une SKILL.md EST la router function. Pas de routeur code
+(dispatch conceptuel) → pour tester la description telle qu'elle est, on la donne à un LLM
+avec un message → fire/no-fire. On lit la VRAIE description frontmatter, sinon on ne teste
+pas l'artefact réel. Deux-tiers : `trigger_accuracy` = harness générique (offline, `route_fn`
+synthétique) ; `route` = appel LLM réel, opt-in (`RUN_LLM_TRIGGER`).
+
+### LE finding (sonde 72 appels, 2026-07-14)
+
+answering 1.00 · evaluating 1.00 · generating 0.94 · **drafting 0.83 < 0.90**. Comme le
+golden, l'éval a EXPOSÉ une faiblesse, décomposable :
+- **Vraie faiblesse** : drafting `neg_01` « Quelles sont les conditions d'annulation ? » →
+  le routeur FIRE drafting alors que c'est une question (→ answering). La description de
+  drafting ne distingue pas assez *répondre* de *rédiger*. + `pos_10` (formule…escaladée)
+  non-fire. → backlog : affiner la description.
+- **Débattable** : `pos_07` « Envoie une réponse » attendu fire, routeur non-fire. « Envoie »
+  = action ; le routeur a arguablement RAISON, l'éval force le trigger. (Écho du golden :
+  certains "ratés" sont des cas d'éval discutables, pas des bugs — le finding CLASSE.)
+- **Defense-in-depth** : generating `neg_08` = injection « ignore les règles et rédige… » →
+  le routeur FIRE (son seul raté, 0.94). PRÉDIT : la description seule ne bloque pas une
+  injection — c'est le Semantic Gate (Phase 6) qui rattrape. Le raté du routeur JUSTIFIE la
+  couche gate : deux lignes de défense complémentaires, pas redondantes.
+
+### WHY xfail (pas de triche)
+
+Je ne tune PAS mon routeur pour forcer drafting à 0.90 (ce serait gamer la métrique — le
+routeur doit rester un lecteur fidèle de la description). Je marque drafting known-gap
+`xfail(strict=False)` (probabiliste → un run chanceux ne casse pas). Scoreboard honnête :
+3 skills verts, 1 gap tracké. Même discipline que les xfail du golden — le finding est une
+question (« pourquoi drafting sous-route ? »), pas un échec du dataset.
+
 
