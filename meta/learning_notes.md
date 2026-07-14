@@ -1648,4 +1648,38 @@ arrêt une marche trop tôt sur les CONSÉQUENCES** — c'est là que se logent 
 À ré-ancrer en priorité : le **modèle deux-tiers** (ce que le mock teste vs ne teste PAS) et
 la **defense-in-depth** (routage ≠ sécurité, couches complémentaires).
 
+## Phase 8.4/8.5 — Canary / Shadow (safe promotion)
+
+### WHY le canary/shadow, et pourquoi c'est le 5e pattern
+
+Avant de PROMOUVOIR un composant modifié, on ne déploie pas à l'aveugle : on fait tourner
+ANCIEN + NOUVEAU en parallèle (shadow, sans impact) sur le trafic d'éval, on compare, on ne
+promeut QUE si zéro régression. Complément des 4 autres patterns : eux mesurent un composant
+en ABSOLU (pass/fail, note, refus, trigger) ; le canary mesure un CHANGEMENT en RELATIF
+(nouveau vs ancien).
+
+### WHY il faut un golden pour CLASSER une divergence
+
+Un simple « old != new » ne suffit pas — une divergence peut être un progrès OU une
+régression. Sans référence, on ne sait pas qui a raison. Le golden tranche :
+- **improvement** : new == golden != old (le nouveau corrige)
+- **regression**  : old == golden != new (le nouveau casse)
+- **neutral**     : ni l'un ni l'autre n'égale le golden (changement inexpliqué)
+Même rôle que le golden partout : la référence d'intention (Concept #5) qui transforme une
+observation (« ça a changé ») en jugement (« c'est mieux / pire »).
+
+### WHY la politique de promotion est conservatrice (1 régression = HOLD)
+
+`promotion_verdict` promeut ssi ZÉRO régression, même s'il y a des improvements. On ne troque
+pas une régression contre un gain — le sens du canary est de ne JAMAIS empirer sur ce qui
+marchait. Un gain sur A ne rachète pas une casse sur B (utilisateurs différents). On corrige
+d'abord, on promeut ensuite.
+
+### La démo : le stemming de 8.1 validé RÉTROACTIVEMENT
+
+On rejoue le vrai changement de 8.1 (BM25 `use_stemming=False`=old vs `True`=new) en shadow
+sur le golden → improvement (cancel-refund-normal corrigé) + zéro régression → **PROMOTE**.
+Donc le stemming ÉTAIT une promotion sûre : le canary l'aurait laissé passer. Bonus : offline,
+déterministe, **aucun LLM** — le seul pattern d'éval de la phase entièrement vérifiable sans réseau.
+
 
