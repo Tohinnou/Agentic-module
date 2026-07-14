@@ -1682,4 +1682,30 @@ sur le golden → improvement (cancel-refund-normal corrigé) + zéro régressio
 Donc le stemming ÉTAIT une promotion sûre : le canary l'aurait laissé passer. Bonus : offline,
 déterministe, **aucun LLM** — le seul pattern d'éval de la phase entièrement vérifiable sans réseau.
 
+## Phase 9 — A2UI conceptuel (build_dashboard)
+
+### WHY l'agent émet une SPEC, pas des pixels
+
+A2UI (Agent-to-UI) standardise comment un agent rend une UI : il émet un arbre de composants
+typés DÉCLARATIF (Column/Text/Metric…), un renderer le transforme. Analogie : **architecte**
+(livre le plan) vs **maçon** (bâtit) — l'un ne pose pas de briques, l'autre ne décide pas du
+plan. Bénéfice = **séparation data/UI** : l'agent reste producteur de données+intention, l'UI
+est une fonction PURE de la spec — une spec → N surfaces (web/mobile/CLI). Le cousin UI de
+MCP (tools) et A2A (agents) : un standard qui découple.
+
+### WHY tool read/bounded PUR + gather séparé
+
+`build_dashboard(input) -> A2UISpec` est une fonction pure (données → UI validée). La récolte
+des données (`gather_dashboard_data`, depuis golden.yaml + judge_golden.yaml) est une fonction
+SÉPARÉE. La séparation data/UI est incarnée dans la signature elle-même : une fonction fournit
+la data, l'autre l'UI.
+
+### Le hook qui boucle avec la Phase 8
+
+Une UI déclarative est de la DATA → golden-testable comme tout tool. On asserte la STRUCTURE
+de l'arbre (version v0.9, surfaceId, racine Column, intégrité référentielle des children), PAS
+un rendu. L'A2UI hérite gratuitement de la discipline d'éval. Le `_validate` défensif encode
+les invariants d'un arbre de composants : ids uniques, composant ∈ vocabulaire, aucun child
+pendouillant. Déterministe, offline, aucun LLM.
+
 
