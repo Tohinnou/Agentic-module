@@ -1,4 +1,4 @@
-import math                                                                                                                                              
+import math
 import re
 from collections import Counter
 
@@ -44,15 +44,16 @@ def _stem_tokens(tokens: list[str]) -> list[str]:
 
 
 class BM25Index:
-  def __init__(self, docs: list[Doc]) -> None:
+  def __init__(self, docs: list[Doc], use_stemming: bool = True) -> None:
     self.docs = docs
     self.n = len(docs)
-    self.doc_tokens = [_stem_tokens(tokenize(d.content)) for d in docs]
+    self.use_stemming = use_stemming
+    self.doc_tokens = [self._prepare(d.content) for d in docs]
     self.doc_lengths = [len(t) for t in self.doc_tokens]
-    
+
     if not docs:
       raise ValueError("BM25Index requires at least one document.")
-    
+
     self.avgdl = sum(self.doc_lengths) / self.n
     self.doc_freqs = [Counter(t) for t in self.doc_tokens]
     self.idf = self._compute_idf()
@@ -80,8 +81,17 @@ class BM25Index:
         score += self.idf[term] * num / denom
     return score
 
+  def _prepare(self, text: str) -> list[str]:
+    """Tokenise, puis stemme SI use_stemming (symétrique index ↔ query).
+
+    use_stemming=False ressuscite le comportement PRÉ-8.1 — utile pour l'ablation
+    et le canary/shadow (comparer ancien vs nouveau retrieval).
+    """
+    tokens = tokenize(text)
+    return _stem_tokens(tokens) if self.use_stemming else tokens
+
   def query(self, q: str, top_k: int = 3) -> list[tuple[Doc, float]]:
-    q_tokens = _stem_tokens(tokenize(q))
+    q_tokens = self._prepare(q)
     scored = [(self.docs[i], self._score(q_tokens, i)) for i in range(self.n)]
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:top_k]
