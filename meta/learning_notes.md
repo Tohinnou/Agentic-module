@@ -1708,4 +1708,35 @@ un rendu. L'A2UI hérite gratuitement de la discipline d'éval. Le `_validate` d
 les invariants d'un arbre de composants : ids uniques, composant ∈ vocabulaire, aucun child
 pendouillant. Déterministe, offline, aucun LLM.
 
+## Phase 10 — Red / Blue / Green teaming (capstone sécurité)
+
+### WHY 3 rôles SÉPARÉS (et pas un seul « garde »)
+
+Red attaque (catalogue), Blue détecte (`monitor`), Green décide (`suggest`). Séparer
+détection et réponse = single responsibility : le MÊME Blue peut servir plusieurs politiques
+Green (dev permissif vs prod stricte) sans se réécrire ; un monitor qui déciderait AUSSI de
+la réponse serait plus dur à raisonner et à tester. Même séparation que Structural/Semantic
+Gate (détecte) vs orchestrator (agit) en Phase 6.
+
+### WHY la réponse Green dépend de la RÉVERSIBILITÉ, pas que du signal
+
+`action_hors_scope` → `corriger_le_brouillon` si c'est un DRAFT, `bloquer` si c'est une
+ACTION irréversible (modifier les tests). Un même signal, deux réponses : un contenu fautif
+se corrige, une action irréversible se bloque. Écho de la **Read/Draft/Act ladder** (§7) —
+plus l'action est irréversible, plus la réponse se durcit.
+
+### WHY la quarantaine conceptuelle
+
+`triage` compose Blue+Green : toute réponse ≠ proceed → l'action est ISOLÉE, pas exécutée.
+On ne « bloque » pas juste — on met en quarantaine (isolé + réponse recommandée). Fail-secure :
+par défaut, le suspect n'agit pas.
+
+### WHY ces vecteurs sont neufs (threat modeling proactif)
+
+Lecture `.env` (fuite de secrets), install de package inconnu (Slopsquatting §7), altération
+des tests (l'agent triche sa propre éval). L'agent ne FAIT même pas ces actions aujourd'hui —
+on modélise la menace AVANT qu'elle existe. Le catalogue Red EST le golden du teaming :
+eval-as-unit-test appliqué à la sécurité (signal + réponse + quarantine par cas, tous les
+signaux/réponses couverts, contrôle nominal non quarantiné = garde false-positive).
+
 
