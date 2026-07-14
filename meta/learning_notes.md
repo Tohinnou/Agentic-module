@@ -1630,4 +1630,22 @@ routeur doit rester un lecteur fidèle de la description). Je marque drafting kn
 3 skills verts, 1 gap tracké. Même discipline que les xfail du golden — le finding est une
 question (« pourquoi drafting sous-route ? »), pas un échec du dataset.
 
+### Feynman 8.3 (clôture, 2026-07-14)
+
+3 questions, réponses sans le code. Bilan : **socle présent (les mécanismes sont vus) mais
+arrêt une marche trop tôt sur les CONSÉQUENCES** — c'est là que se logent les pièges du cours.
+- **Q1 (deux-tiers)** : « le mock n'évalue pas le jugement sémantique » = bon réflexe, mais
+  (a) « ne mesure que le score » est à l'envers — le mock **fabrique** un score bidon (sinon
+  characterization) ; (b) n'a pas nommé ce que le mock teste VRAIMENT (plomberie +
+  déterminisme) ; (c) a manqué le lien avec la fusion (même frontière déterministe/sémantique).
+- **Q2 (pass^k use_cache)** : mécanisme vu (cache → même résultat) mais conséquence ratée —
+  pass^k deviendrait un **1.0 FACTICE** qui masque la flakiness qu'il existe pour détecter
+  (détecteur de fumée débranché).
+- **Q3 (defense-in-depth)** : « j'en sais rien ». Neuf. Débloqué par l'analogie **videur**
+  (liste d'invités = routage) + **portique** (arme cachée = sécurité) : le raté du routeur sur
+  l'injection n'est pas un bug, c'est le job du gate. **Separation of concerns.**
+
+À ré-ancrer en priorité : le **modèle deux-tiers** (ce que le mock teste vs ne teste PAS) et
+la **defense-in-depth** (routage ≠ sécurité, couches complémentaires).
+
 
